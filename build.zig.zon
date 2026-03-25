@@ -1,0 +1,17 @@
+.{
+    .name = .zig_xcb,
+    .version = "0.0.0",
+    .fingerprint = 0xf57dbbd85d43b2e9,
+    .minimum_zig_version = "0.16.0-dev.2682+02142a54d",
+    .dependencies = .{
+        .xproto = .{
+            .url = "git+https://gitlab.freedesktop.org/xorg/proto/xcbproto#cf7e2581b613802f2f8ec2a4b50a6a20aad4bf52",
+            .hash = "N-V-__8AAI3NDABGCTDod4wqDAgyjwu68E8QptAEjiiCyqRb",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
