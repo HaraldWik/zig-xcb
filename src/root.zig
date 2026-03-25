@@ -1,5 +1,1 @@
-const conn = @import("conn.zig");
-
-comptime {
-    _ = conn;
-}
+pub const c = @import("c");

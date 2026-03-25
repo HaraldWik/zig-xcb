@@ -44,10 +44,12 @@ pub fn build(b: *std.Build) void {
 
     const xcbgen_step = b.step("xcbgen", "Generates the xcb proto.xml files into .c and .h files");
 
-    // std.Io.Dir.createDirAbsolute(b.graph.io, b.pathJoin(&.{ b.build_root.path orelse "", "zig-pkg/xcbgen" }), .default_dir) catch |err| switch (err) {
-    //     error.PathAlreadyExists => {},
-    //     else => std.debug.panic("create dir xcbgen in zig-pkg: {s}", .{@errorName(err)}),
-    // };
+    std.Io.Dir.createDirAbsolute(b.graph.io, b.pathJoin(&.{ b.build_root.path orelse "", "zig-pkg/xcbgen" }), .default_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => std.debug.panic("create dir xcbgen in zig-pkg: {s}", .{@errorName(err)}),
+    };
+
+    const xcbgen_path = "zig-pkg/xcbgen";
 
     for (protocol_file_names) |file_name| {
         const xcbgen = xproto_dep.builder.build_root.path orelse ".";
@@ -56,14 +58,13 @@ pub fn build(b: *std.Build) void {
         const xproto_cmd = b.addSystemCommand(&.{ python, c_client_python_script });
         xproto_cmd.setEnvironmentVariable("PYTHONPATH", xcbgen);
         xproto_cmd.addFileArg(xproto_dep.builder.path(xproto_dep.builder.pathJoin(&.{ "src/", file_name })));
-        xproto_cmd.setCwd(b.path("zig-pkg/xcbgen"));
+        xproto_cmd.setCwd(b.path(xcbgen_path));
         xcbgen_step.dependOn(&xproto_cmd.step);
     }
 
     const lib = b.addLibrary(.{
         .name = "xcb",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
@@ -91,47 +92,84 @@ pub fn build(b: *std.Build) void {
     lib.installHeader(b.path("src/xcbint.h"), "xcb/xcbint.h");
     lib.installHeader(b.path("src/xcb_windefs.h"), "xcb/xcb_windefs.h");
 
+    for (protocol_file_names) |file_name| {
+        lib.installHeader(
+            b.path(b.fmt("{s}/{s}.h", .{ xcbgen_path, file_name[0 .. file_name.len - 4] })),
+            b.fmt("xcb/xcb_{s}.h", .{file_name[0 .. file_name.len - 4]}),
+        );
+    }
+
     lib.root_module.linkSystemLibrary("xau", .{});
 
-    // lib.root_module.addIncludePath(h_file.dirname());
     lib.root_module.addCSourceFiles(.{
-        .root = b.path("zig-pkg/xcbgen/"),
+        .root = b.path(xcbgen_path),
         .files = &.{
             "xproto.c",
         },
     });
     for (protocol_file_names) |file_name| {
         lib.root_module.addCSourceFile(.{
-            .file = b.path(b.fmt("zig-pkg/xcbgen/{s}.c", .{file_name[0 .. file_name.len - 4]})),
+            .file = b.path(b.fmt("{s}/{s}.c", .{ xcbgen_path, file_name[0 .. file_name.len - 4] })),
         });
     }
-    lib.root_module.addIncludePath(b.path("zig-pkg/xcbgen/"));
+    lib.root_module.addIncludePath(b.path(xcbgen_path));
     lib.root_module.addCMacro("XCB_QUEUE_BUFFER_SIZE", "1028");
     var buf: [128]u8 = undefined;
     const iov_max_string = buf[0..std.fmt.printInt(&buf, std.posix.IOV_MAX, 10, .lower, .{})];
     lib.root_module.addCMacro("IOV_MAX", iov_max_string);
 
-    const exe = b.addExecutable(.{
-        .name = "example",
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.addWriteFiles().add("xcb.h",
+            \\#include <xcb.h>
+            \\#include <bigreq.h>
+            \\#include <composite.h>
+            \\#include <damage.h>
+            \\#include <dbe.h>
+            \\#include <dpms.h>
+            \\#include <dri2.h>
+            \\#include <dri3.h>
+            \\#include <ge.h>
+            \\#include <glx.h>
+            \\#include <present.h>
+            \\#include <randr.h>
+            \\#include <record.h>
+            \\#include <render.h>
+            \\#include <res.h>
+            \\#include <screensaver.h>
+            \\#include <shape.h>
+            \\#include <shm.h>
+            \\#include <sync.h>
+            \\#include <xc_misc.h>
+            \\#include <xevie.h>
+            \\#include <xf86dri.h>
+            \\#include <xf86vidmode.h>
+            \\#include <xfixes.h>
+            \\#include <xinerama.h>
+            \\#include <xinput.h>
+            \\#include <xkb.h>
+            \\#include <xprint.h>
+            \\#include <xproto.h>
+            \\#include <xselinux.h>
+            \\#include <xtest.h>
+            \\#include <xv.h>
+            \\#include <xvmc.h>
+        ),
+        .target = target,
+        .optimize = optimize,
     });
-    exe.root_module.addCSourceFile(.{ .file = b.path("example/main.c") });
-    exe.root_module.addIncludePath(b.path("src/"));
-    exe.root_module.addIncludePath(b.path("zig-pkg/xcbgen/"));
+    for (lib.root_module.include_dirs.items) |include_dir| {
+        translate_c.addIncludePath(include_dir.path);
+    }
 
-    // exe.root_module.linkSystemLibrary("xcb", .{});
+    const mod = b.addModule("xcb", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "c", .module = translate_c.createModule() },
+        },
+    });
+    mod.linkLibrary(lib);
 
-    exe.root_module.linkLibrary(lib);
-
-    b.installArtifact(exe);
-
-    const run_step = b.step("run", "Run the app");
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    b.installArtifact(lib);
 }

@@ -1,7 +1,7 @@
 .{
-    .name = .zig_xcb,
+    .name = .xcb,
     .version = "0.0.0",
-    .fingerprint = 0xf57dbbd85d43b2e9,
+    .fingerprint = 0x48cfd8ea88ef49c7,
     .minimum_zig_version = "0.16.0-dev.2682+02142a54d",
     .dependencies = .{
         .xproto = .{
