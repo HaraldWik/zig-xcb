@@ -34,6 +34,10 @@
 #include "config.h"
 #endif
 
+#ifndef XCB_QUEUE_BUFFER_SIZE
+#define XCB_QUEUE_BUFFER_SIZE 1028
+#endif
+
 #include <stddef.h> /* for offsetof() definition */
 
 #ifdef GCC_HAS_VISIBILITY

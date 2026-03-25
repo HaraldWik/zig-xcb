@@ -87,15 +87,21 @@ pub fn build(b: *std.Build) void {
     });
     lib.root_module.addIncludePath(b.path("src/"));
 
+    lib.installHeader(b.path("src/xcb.h"), "xcb.h");
     lib.installHeader(b.path("src/xcb.h"), "xcb/xcb.h");
     lib.installHeader(b.path("src/xcbext.h"), "xcb/xcbext.h");
     lib.installHeader(b.path("src/xcbint.h"), "xcb/xcbint.h");
     lib.installHeader(b.path("src/xcb_windefs.h"), "xcb/xcb_windefs.h");
 
     for (protocol_file_names) |file_name| {
+        const real_path = b.path(b.fmt("{s}/{s}.h", .{ xcbgen_path, file_name[0 .. file_name.len - 4] }));
         lib.installHeader(
-            b.path(b.fmt("{s}/{s}.h", .{ xcbgen_path, file_name[0 .. file_name.len - 4] })),
+            real_path,
             b.fmt("xcb/xcb_{s}.h", .{file_name[0 .. file_name.len - 4]}),
+        );
+        lib.installHeader(
+            real_path,
+            b.fmt("{s}.h", .{file_name[0 .. file_name.len - 4]}),
         );
     }
 
@@ -113,7 +119,6 @@ pub fn build(b: *std.Build) void {
         });
     }
     lib.root_module.addIncludePath(b.path(xcbgen_path));
-    lib.root_module.addCMacro("XCB_QUEUE_BUFFER_SIZE", "1028");
     var buf: [128]u8 = undefined;
     const iov_max_string = buf[0..std.fmt.printInt(&buf, std.posix.IOV_MAX, 10, .lower, .{})];
     lib.root_module.addCMacro("IOV_MAX", iov_max_string);

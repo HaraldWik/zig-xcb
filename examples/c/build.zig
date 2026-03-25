@@ -7,14 +7,15 @@ pub fn build(b: *std.Build) void {
     const xcb = b.dependency("xcb", .{ .target = target, .optimize = optimize });
 
     const exe = b.addExecutable(.{
-        .name = "simple",
+        .name = "c",
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .link_libc = true,
         }),
     });
+
     exe.root_module.addCSourceFile(.{ .file = b.path("src/main.c") });
+
     exe.root_module.linkLibrary(xcb.artifact("xcb"));
 
     b.installArtifact(exe);
