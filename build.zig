@@ -43,24 +43,34 @@ pub fn build(b: *std.Build) void {
     const xproto_dep = b.dependency("xproto", .{});
 
     const xcbgen_step = b.step("xcbgen", "Generates the xcb proto.xml files into .c and .h files");
+    const xcbgen_path = "zig-pkg/xcbgen";
 
+    var need_xcbgen: bool = true;
     std.Io.Dir.createDirAbsolute(b.graph.io, b.pathJoin(&.{ b.build_root.path orelse "", "zig-pkg/xcbgen" }), .default_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
+        error.PathAlreadyExists => need_xcbgen = false,
         else => std.debug.panic("create dir xcbgen in zig-pkg: {s}", .{@errorName(err)}),
     };
 
-    const xcbgen_path = "zig-pkg/xcbgen";
+    const xcbgen = xproto_dep.builder.build_root.path orelse ".";
+    const c_client_python_script = b.pathJoin(&.{ b.build_root.path orelse ".", "src/c_client.py" });
 
     for (protocol_file_names) |file_name| {
-        const xcbgen = xproto_dep.builder.build_root.path orelse ".";
-        const c_client_python_script = b.pathJoin(&.{ b.build_root.path orelse ".", "src/c_client.py" });
-
         const xproto_cmd = b.addSystemCommand(&.{ python, c_client_python_script });
         xproto_cmd.setEnvironmentVariable("PYTHONPATH", xcbgen);
         xproto_cmd.addFileArg(xproto_dep.builder.path(xproto_dep.builder.pathJoin(&.{ "src/", file_name })));
         xproto_cmd.setCwd(b.path(xcbgen_path));
         xcbgen_step.dependOn(&xproto_cmd.step);
     }
+
+    const xau = b.addLibrary(.{
+        .name = "xau",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/xau/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
 
     const lib = b.addLibrary(.{
         .name = "xcb",
@@ -105,7 +115,7 @@ pub fn build(b: *std.Build) void {
         );
     }
 
-    lib.root_module.linkSystemLibrary("xau", .{});
+    // lib.root_module.linkSystemLibrary("xau", .{});
 
     lib.root_module.addCSourceFiles(.{
         .root = b.path(xcbgen_path),
@@ -165,6 +175,7 @@ pub fn build(b: *std.Build) void {
     for (lib.root_module.include_dirs.items) |include_dir| {
         translate_c.addIncludePath(include_dir.path);
     }
+    lib.root_module.linkLibrary(xau);
 
     const mod = b.addModule("xcb", .{
         .root_source_file = b.path("src/root.zig"),
@@ -176,5 +187,6 @@ pub fn build(b: *std.Build) void {
     });
     mod.linkLibrary(lib);
 
+    b.installArtifact(xau);
     b.installArtifact(lib);
 }
