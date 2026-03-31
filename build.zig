@@ -1,89 +1,41 @@
 const std = @import("std");
 
-pub const protocol_file_names: []const []const u8 = &.{
-    "bigreq.xml",
-    "composite.xml",
-    "damage.xml",
-    "dbe.xml",
-    "dpms.xml",
-    "dri2.xml",
-    "dri3.xml",
-    "ge.xml",
-    "glx.xml",
-    "present.xml",
-    "randr.xml",
-    "record.xml",
-    "render.xml",
-    "res.xml",
-    "screensaver.xml",
-    "shape.xml",
-    "shm.xml",
-    "sync.xml",
-    "xc_misc.xml",
-    "xevie.xml",
-    "xf86dri.xml",
-    "xf86vidmode.xml",
-    "xfixes.xml",
-    "xinerama.xml",
-    "xinput.xml",
-    "xkb.xml",
-    "xprint.xml",
-    "xproto.xml",
-    "xselinux.xml",
-    "xtest.xml",
-    "xv.xml",
-    "xvmc.xml",
-};
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const python = b.findProgram(&.{"python3"}, &.{"python"}) catch @panic("could not find python3");
-    const xproto_dep = b.dependency("xproto", .{});
+    const xproto = b.dependency("xproto", .{});
 
-    const xcbgen_step = b.step("xcbgen", "Generates the xcb proto.xml files into .c and .h files");
-    const xcbgen_path = "zig-pkg/xcbgen";
-
-    var need_xcbgen: bool = true;
-    std.Io.Dir.createDirAbsolute(b.graph.io, b.pathJoin(&.{ b.build_root.path orelse "", "zig-pkg/xcbgen" }), .default_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => need_xcbgen = false,
-        else => std.debug.panic("create dir xcbgen in zig-pkg: {s}", .{@errorName(err)}),
-    };
-
-    const xcbgen = xproto_dep.builder.build_root.path orelse ".";
-    const c_client_python_script = b.pathJoin(&.{ b.build_root.path orelse ".", "src/c_client.py" });
-
-    for (protocol_file_names) |file_name| {
-        const xproto_cmd = b.addSystemCommand(&.{ python, c_client_python_script });
-        xproto_cmd.setEnvironmentVariable("PYTHONPATH", xcbgen);
-        xproto_cmd.addFileArg(xproto_dep.builder.path(xproto_dep.builder.pathJoin(&.{ "src/", file_name })));
-        xproto_cmd.setCwd(b.path(xcbgen_path));
-        xcbgen_step.dependOn(&xproto_cmd.step);
-    }
+    const scanner = Scanner.create(b);
+    scanner.addProtocols(.{
+        .root = xproto.path("src/"),
+        .files = &.{
+            "xproto.xml",
+            "bigreq.xml",
+            "res.xml",
+            "damage.xml",
+        },
+    });
+    // .{ .xcb_xml = xproto.path("src"), }
 
     const xau = b.addLibrary(.{
         .name = "xau",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/xau/root.zig"),
+            .root_source_file = b.path("src/xau.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
         }),
     });
 
-    const lib = b.addLibrary(.{
-        .name = "xcb",
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
+    const mod = b.addModule("xcb", .{
+        .root_source_file = scanner.result,
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
     });
-    lib.step.dependOn(xcbgen_step);
-
-    lib.root_module.addCSourceFiles(.{
-        .root = b.path("src/"),
+    mod.addCSourceFiles(.{
+        .root = b.path("src"),
         .files = &.{
             "xcb_auth.c",
             "xcb_conn.c",
@@ -95,98 +47,165 @@ pub fn build(b: *std.Build) void {
             "xcb_xid.c",
         },
     });
-    lib.root_module.addIncludePath(b.path("src/"));
-
-    lib.installHeader(b.path("src/xcb.h"), "xcb.h");
-    lib.installHeader(b.path("src/xcb.h"), "xcb/xcb.h");
-    lib.installHeader(b.path("src/xcbext.h"), "xcb/xcbext.h");
-    lib.installHeader(b.path("src/xcbint.h"), "xcb/xcbint.h");
-    lib.installHeader(b.path("src/xcb_windefs.h"), "xcb/xcb_windefs.h");
-
-    for (protocol_file_names) |file_name| {
-        const real_path = b.path(b.fmt("{s}/{s}.h", .{ xcbgen_path, file_name[0 .. file_name.len - 4] }));
-        lib.installHeader(
-            real_path,
-            b.fmt("xcb/xcb_{s}.h", .{file_name[0 .. file_name.len - 4]}),
-        );
-        lib.installHeader(
-            real_path,
-            b.fmt("{s}.h", .{file_name[0 .. file_name.len - 4]}),
-        );
-    }
-
-    // lib.root_module.linkSystemLibrary("xau", .{});
-
-    lib.root_module.addCSourceFiles(.{
-        .root = b.path(xcbgen_path),
+    mod.addCSourceFiles(.{
+        .root = b.path("src/xcbgen/"),
         .files = &.{
+            "xselinux.c",
+            "xvmc.c",
+            "xf86vidmode.c",
+            "ge.c",
+            "xf86dri.c",
+            "render.c",
+            "randr.c",
+            "record.c",
+            "xinput.c",
+            "glx.c",
+            "xinerama.c",
+            "xv.c",
+            "xc_misc.c",
+            "sync.c",
+            "shm.c",
+            "present.c",
+            "xfixes.c",
+            "composite.c",
+            "shape.c",
+            "xevie.c",
+            "xprint.c",
+            "res.c",
+            "xkb.c",
+            "dbe.c",
+            "screensaver.c",
+            "dpms.c",
             "xproto.c",
+            "dri3.c",
+            "damage.c",
+            "bigreq.c",
+            "dri2.c",
+            "xtest.c",
         },
     });
-    for (protocol_file_names) |file_name| {
-        lib.root_module.addCSourceFile(.{
-            .file = b.path(b.fmt("{s}/{s}.c", .{ xcbgen_path, file_name[0 .. file_name.len - 4] })),
-        });
-    }
-    lib.root_module.addIncludePath(b.path(xcbgen_path));
-    var buf: [128]u8 = undefined;
-    const iov_max_string = buf[0..std.fmt.printInt(&buf, std.posix.IOV_MAX, 10, .lower, .{})];
-    lib.root_module.addCMacro("IOV_MAX", iov_max_string);
+    mod.addIncludePath(b.path("src/"));
+    mod.addIncludePath(b.path("src/xcbgen"));
 
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = b.addWriteFiles().add("xcb.h",
-            \\#include <xcb.h>
-            \\#include <bigreq.h>
-            \\#include <composite.h>
-            \\#include <damage.h>
-            \\#include <dbe.h>
-            \\#include <dpms.h>
-            \\#include <dri2.h>
-            \\#include <dri3.h>
-            \\#include <ge.h>
-            \\#include <glx.h>
-            \\#include <present.h>
-            \\#include <randr.h>
-            \\#include <record.h>
-            \\#include <render.h>
-            \\#include <res.h>
-            \\#include <screensaver.h>
-            \\#include <shape.h>
-            \\#include <shm.h>
-            \\#include <sync.h>
-            \\#include <xc_misc.h>
-            \\#include <xevie.h>
-            \\#include <xf86dri.h>
-            \\#include <xf86vidmode.h>
-            \\#include <xfixes.h>
-            \\#include <xinerama.h>
-            \\#include <xinput.h>
-            \\#include <xkb.h>
-            \\#include <xprint.h>
-            \\#include <xproto.h>
-            \\#include <xselinux.h>
-            \\#include <xtest.h>
-            \\#include <xv.h>
-            \\#include <xvmc.h>
-        ),
-        .target = target,
-        .optimize = optimize,
-    });
-    for (lib.root_module.include_dirs.items) |include_dir| {
-        translate_c.addIncludePath(include_dir.path);
-    }
-    lib.root_module.linkLibrary(xau);
-
-    const mod = b.addModule("xcb", .{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "c", .module = translate_c.createModule() },
-        },
-    });
-    mod.linkLibrary(lib);
-
-    b.installArtifact(xau);
-    b.installArtifact(lib);
+    mod.linkLibrary(xau);
 }
+
+pub const Scanner = struct {
+    run: *std.Build.Step.Run,
+    result: std.Build.LazyPath,
+
+    pub const AddProtocolsOptions = struct {
+        root: std.Build.LazyPath,
+        files: []const []const u8,
+    };
+
+    pub fn create(b: *std.Build) *@This() {
+        const exe = b.addExecutable(.{
+            .name = "xcb-scanner",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/scanner.zig"),
+                .target = b.graph.host,
+            }),
+        });
+
+        const run = b.addRunArtifact(exe);
+        run.addArg("-o");
+
+        const result = run.addOutputFileArg("xcb.zig");
+
+        const scanner = b.allocator.create(Scanner) catch @panic("OOM");
+        scanner.* = .{
+            .run = run,
+            .result = result,
+        };
+        return scanner;
+    }
+
+    pub fn addProtocol(scanner: *Scanner, path: std.Build.LazyPath) void {
+        scanner.run.addArg("-i");
+        scanner.run.addFileArg(path);
+    }
+
+    pub fn addProtocols(scanner: *Scanner, options: AddProtocolsOptions) void {
+        for (options.files) |file| {
+            const path = options.root.path(options.root.dependency.dependency.builder, file);
+            scanner.addProtocol(path);
+        }
+    }
+};
+
+// const zig_xcb_build_zig = @This();
+
+// pub const Scanner = struct {
+//     run: *std.Build.Step.Run,
+//     result: std.Build.LazyPath,
+
+//     xcb_protocols: std.Build.LazyPath,
+
+//     pub const Options = struct {
+//         xcb_xml: ?std.Build.LazyPath = null,
+//         xcb_protocols: ?std.Build.LazyPath = null,
+//     };
+
+//     pub fn create(b: *std.Build, options: Options) *Scanner {
+//         const pkg_config_exe_path = b.graph.environ_map.get("PKG_CONFIG") orelse "pkg-config";
+//         const xcb_xml: std.Build.LazyPath = options.xcb_xml orelse blk: {
+//             const pc_output = b.run(&.{ pkg_config_exe_path, "--variable=pkgdatadir", "xcb-scanner" });
+//             break :blk .{
+//                 .cwd_relative = b.pathJoin(&.{ std.mem.trim(u8, pc_output, &std.ascii.whitespace), "xcb.xml" }),
+//             };
+//         };
+//         const xcb_protocols: std.Build.LazyPath = options.xcb_protocols orelse blk: {
+//             const pc_output = b.run(&.{ pkg_config_exe_path, "--variable=pkgdatadir", "xcb-protocols" });
+//             break :blk .{
+//                 .cwd_relative = std.mem.trim(u8, pc_output, &std.ascii.whitespace),
+//             };
+//         };
+
+//         const exe = b.addExecutable(.{
+//             .name = "zig-xcb-scanner",
+//             .root_module = b.createModule(.{
+//                 .root_source_file = blk: {
+//                     if (b.available_deps.len > 0) {
+//                         break :blk b.dependencyFromBuildZig(zig_xcb_build_zig, .{}).path("src/scanner.zig");
+//                     } else {
+//                         break :blk b.path("src/scanner.zig");
+//                     }
+//                 },
+//                 .target = b.graph.host,
+//             }),
+//         });
+
+//         const run = b.addRunArtifact(exe);
+
+//         run.addArg("-o");
+//         const result = run.addOutputFileArg("xcb.zig");
+
+//         run.addArg("-i");
+//         run.addFileArg(xcb_xml);
+
+//         const scanner = b.allocator.create(Scanner) catch @panic("OOM");
+//         scanner.* = .{
+//             .run = run,
+//             .result = result,
+//             .xcb_protocols = xcb_protocols,
+//         };
+
+//         return scanner;
+//     }
+
+//     /// Scan protocol xml provided by the wayland-protocols package at the given path
+//     /// relative to the wayland-protocols installation. (e.g. "xproto/bigreq.xml")
+//     pub fn addSystemProtocol(scanner: *Scanner, sub_path: []const u8) void {
+//         const b = scanner.run.step.owner;
+
+//         scanner.run.addArg("-i");
+//         scanner.run.addFileArg(scanner.xcb_protocols.path(b, sub_path));
+//     }
+
+//     /// Scan the protocol xml at the given path.
+//     pub fn addCustomProtocol(scanner: *Scanner, path: std.Build.LazyPath) void {
+//         scanner.run.addArg("-i");
+//         scanner.run.addFileArg(path);
+//     }
+// };

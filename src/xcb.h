@@ -28,6 +28,7 @@
 #ifndef __XCB_H__
 #define __XCB_H__
 #include <sys/types.h>
+#define IOV_MAX (1028)
 
 #include <stdint.h>
 
