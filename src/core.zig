@@ -1,11 +1,13 @@
+const std = @import("std");
+
 pub const Connection = struct {
     has_error: c_int,
 
     setup: *xproto.Setup,
-    //     int fd;
+    fd: c_int,
 
     //     /* I/O data */
-    //     pthread_mutex_t iolock;
+    iolock: std.c.pthread_mutex_t,
     //     _xcb_in in;
     //     _xcb_out out;
 
@@ -27,10 +29,13 @@ pub const Header = packed struct {
     length: u16, // in 4-byte units
 };
 
-pub const ffi = struct {
+const ffi = struct {
     extern fn xcb_connect(display_name: ?[*:0]const u8, screenp: ?*c_int) *Connection;
     extern fn xcb_disconnect(c: *Connection) void;
 };
+
+pub const BYTE = u8;
+pub const char = u8;
 
 pub const BOOL = bool;
 
@@ -41,3 +46,11 @@ pub const INT32 = i32;
 pub const CARD8 = u8;
 pub const CARD16 = u16;
 pub const CARD32 = u32;
+
+pub const ATOM = enum(u32) {
+    _,
+};
+
+pub const TIMESTAMP = enum(u32) {
+    _,
+};

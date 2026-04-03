@@ -10,10 +10,21 @@ pub fn build(b: *std.Build) void {
     scanner.addProtocols(.{
         .root = xproto.path("src/"),
         .files = &.{
-            "xproto.xml",
-            "bigreq.xml",
-            "res.xml",
-            "damage.xml",
+            "damage.xml", "dri2.xml",        "glx.xml",
+            "record.xml", "screensaver.xml", "sync.xml",
+            "xevie.xml",    "xfixes.xml", //"xkb.xml",
+            "xselinux.xml", "xvmc.xml",
+            "bigreq.xml",   "dbe.xml",
+            "dri3.xml",     "present.xml",
+            "render.xml",   "shape.xml",
+            "xc_misc.xml",  "xf86dri.xml",
+            "xinerama.xml", "xprint.xml",
+            "xtest.xml",    "composite.xml",
+            "dpms.xml",     "ge.xml",
+            "randr.xml",    "res.xml",
+            "shm.xml",      "xf86vidmode.xml",
+            //"xinput.xml",
+            "xproto.xml",   "xv.xml",
         },
     });
     // .{ .xcb_xml = xproto.path("src"), }

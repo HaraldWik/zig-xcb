@@ -26,7 +26,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const out_path = out_path_opt orelse return error.MissingArg;
-    std.log.info("{s}", .{out_path});
+    log.info("{s}", .{out_path});
 
     var documents: std.ArrayList([]const u8) = .empty;
     defer {
@@ -35,10 +35,10 @@ pub fn main(init: std.process.Init) !void {
         documents.deinit(gpa);
     }
 
-    var tree: Tree = .init(gpa);
-    defer tree.deinit();
+    var xml_deserializer: XmlDeserializer = .init(gpa);
+    defer xml_deserializer.deinit();
 
-    for (protocols.items) |protocol| {
+    for (protocols.items, 0..) |protocol, i| {
         var protocol_file = try std.Io.Dir.openFileAbsolute(io, protocol, .{});
         defer protocol_file.close(io);
         var file_reader = protocol_file.reader(io, &.{});
@@ -46,7 +46,8 @@ pub fn main(init: std.process.Init) !void {
         try documents.append(gpa, document);
 
         var parser: xml.Parser = .init(document);
-        try tree.parse(&parser);
+        std.log.info("[{d}/{d}] {s}", .{ i + 1, protocols.items.len, std.Io.Dir.path.basename(protocol) });
+        try xml_deserializer.parse(&parser);
     }
 
     var buffer: std.Io.Writer.Allocating = .init(gpa);
@@ -58,7 +59,8 @@ pub fn main(init: std.process.Init) !void {
     );
     try writer.writeAll(@embedFile("core.zig"));
     try writer.writeByte('\n');
-    try tree.emit(writer);
+
+    try xml_deserializer.emit(writer);
 
     const generated = try buffer.toOwnedSliceSentinel(0);
     defer gpa.free(generated);
@@ -83,311 +85,285 @@ pub fn main(init: std.process.Init) !void {
     try out_writer.interface.flush();
 }
 
-pub const Tree = struct {
+pub const XmlDeserializer = struct {
     gpa: std.mem.Allocator,
-    protocols: std.ArrayList(Protocol) = .empty,
+    tree: Tree,
 
-    pub const Tag = enum {
-        none, // none
-        xcb,
-        import,
-        type,
-        typedef,
-        xidtype,
-        xidunion,
-        event,
-        @"error",
-        @"struct",
-        request,
-        reply,
-        field,
-        pad,
-        list,
-        fieldref,
-        @"enum",
-        item,
-        value,
-        bit,
-        op,
-        doc,
-        brief,
-        description,
-    };
+    pub const Tree = FamilyTree(Node);
 
-    pub const Protocol = struct {
-        header: ?[]const u8 = null,
-        @"extension-xname": ?[]const u8 = null,
-        @"extension-name": ?[]const u8 = null,
-        @"extension-multiword": bool = false,
-        @"major-version": u8 = 0,
-        @"minor-version": u8 = 0,
-
-        structs: std.ArrayList(Struct) = .empty,
-        requests: std.ArrayList(Request) = .empty,
-    };
-
-    pub const Field = union(enum) {
-        normal: struct {
-            name: []const u8 = "",
-            type: []const u8 = "",
+    pub const Node = union(enum) {
+        root,
+        xcb: struct {
+            header: []const u8 = "invalid",
+            @"extension-xname": ?[]const u8 = null,
+            @"extension-name": ?[]const u8 = null,
+            @"extension-multiword": bool = false,
+            @"major-version": u8 = 0,
+            @"minor-version": u8 = 0,
         },
-        list: struct {
-            name: []const u8 = "",
-            type: []const u8 = "",
-            fieldref: *Field = undefined,
-        },
-        pad: struct {
-            bytes: u8 = 0,
-        },
-    };
+        import: []const u8,
+        typedef: struct { oldname: []const u8, newname: []const u8 },
+        type: []const u8,
+        xidtype: Name,
+        xidunion: Name,
+        @"enum": Name,
+        enumref: struct { ref: []const u8 },
+        item: Name,
+        value: u64,
+        bit: u64,
+        @"struct": Name,
+        @"union": Name,
+        request: struct { name: []const u8, opcode: u8 },
+        reply: void,
 
-    pub const Struct = struct {
-        name: []const u8 = "",
-        fields: *std.ArrayList(Field) = undefined,
-    };
+        event: struct { name: []const u8, number: u32 },
+        eventcopy: Copy,
+        eventstruct: Name,
+        allowed: struct { extension: []const u8, xge: bool, @"opcode-min": u8, @"opcode-max": u8 },
 
-    pub const Request = struct {
-        name: []const u8 = "",
-        opcode: u8 = 0,
-        fields: *std.ArrayList(Field) = undefined,
-        reply: ?*Reply = null,
-    };
+        @"error": struct { name: []const u8, number: u32 },
+        errorcopy: Copy,
 
-    pub const Reply = struct {
-        fields: *std.ArrayList(Field) = undefined,
+        field: Field,
+        fieldref: []const u8,
+        pad: struct { bytes: u8 },
+        list: Field,
+        length: void,
+        fd: Name,
+        exprfield: Field,
+
+        op: struct { op: Op },
+        unop: struct { op: Op },
+        sumof: struct { ref: []const u8 },
+        popcount: void,
+        @"listelement-ref": void,
+        paramref: struct { type: []const u8 },
+
+        @"switch": Name,
+        case: Name,
+        bitcase: void,
+
+        required_start_align: struct { @"align": u8, offset: u8 },
+
+        doc: []const u8,
+        brief: []const u8,
+        description: []const u8,
+        example: []const u8,
+        see: Field,
+
+        character_data: []const u8,
+
+        pub const Name = struct { name: []const u8 };
+        pub const Field = struct { name: []const u8, type: []const u8 };
+        pub const Copy = struct { name: []const u8, number: u32, ref: []const u8 };
+
+        pub const Op = enum(u8) {
+            invalid,
+            @"+" = '+',
+            @"-" = '-',
+            @"*" = '*',
+            @"/" = '/',
+            @"&amp;" = '&',
+            @"&lt;" = '<',
+            @"&gt;" = '>',
+            @"&quot;" = '"',
+            @"&apos;" = '\'',
+        };
     };
 
     pub fn init(gpa: std.mem.Allocator) @This() {
-        return .{ .gpa = gpa };
+        return .{ .gpa = gpa, .tree = .init(.root) };
     }
 
     pub fn deinit(self: *@This()) void {
-        for (self.protocols.items) |*protocol| {
-            for (protocol.structs.items) |@"struct"| {
-                @"struct".fields.deinit(self.gpa);
-                self.gpa.destroy(@"struct".fields);
-            }
-            protocol.structs.deinit(self.gpa);
-
-            for (protocol.requests.items) |request| {
-                request.fields.deinit(self.gpa);
-                self.gpa.destroy(request.fields);
-                if (request.reply) |reply| {
-                    reply.fields.deinit(self.gpa);
-                    self.gpa.destroy(reply.fields);
-                    self.gpa.destroy(reply);
-                }
-            }
-            protocol.requests.deinit(self.gpa);
-        }
-        self.protocols.deinit(self.gpa);
+        self.tree.deinit(self.gpa);
     }
 
     pub fn parse(self: *@This(), parser: *xml.Parser) !void {
-        var protocol: ?*Protocol = null;
-        var decl: ?union(enum) {
-            @"struct": *Struct,
-            request: *Request,
-            reply: *Reply,
-        } = null;
-        var field: ?*Field = null;
-
-        var tag: Tag = .none;
+        var stack: std.ArrayList(*Tree.Node) = .empty;
+        defer stack.deinit(self.gpa);
 
         while (parser.next()) |event| switch (event) {
             .open_tag => |tag_str| {
-                tag = std.meta.stringToEnum(Tag, tag_str) orelse std.debug.panic("unknown tag: {s}", .{tag_str});
-                switch (tag) {
-                    .none => {},
-                    .xcb => {
-                        protocol = try self.protocols.addOne(self.gpa);
-                        protocol.?.* = .{};
-                    },
-                    .import => {},
-                    .type => {},
-                    .typedef => {},
-                    .xidtype => {},
-                    .xidunion => {},
-                    .event => {},
-                    .@"error" => {},
-                    .@"struct" => {
-                        const @"struct" = try protocol.?.structs.addOne(self.gpa);
-                        @"struct".* = .{
-                            .fields = try self.gpa.create(std.ArrayList(Field)),
-                        };
-                        @"struct".fields.* = .empty;
-                        decl = .{ .@"struct" = @"struct" };
-                    },
-                    .request => {
-                        const request = try protocol.?.requests.addOne(self.gpa);
-                        request.* = .{
-                            .fields = try self.gpa.create(std.ArrayList(Field)),
-                        };
-                        request.fields.* = .empty;
-                        decl = .{ .request = request };
-                    },
-                    .reply => {
-                        if (decl == null) continue;
-                        const reply = try self.gpa.create(Reply);
-                        reply.* = .{
-                            .fields = try self.gpa.create(std.ArrayList(Field)),
-                        };
-                        reply.fields.* = .empty;
-                        decl.?.request.reply = reply;
-                        decl = .{ .reply = reply };
-                    },
-                    .field => {
-                        const fields = switch (decl orelse continue) {
-                            .@"struct" => |@"struct"| @"struct".fields,
-                            .request => |request| request.fields,
-                            .reply => |reply| reply.fields,
-                        };
-
-                        field = try fields.addOne(self.gpa);
-                        field.?.* = .{ .normal = .{} };
-                    },
-                    .pad => {
-                        const fields = switch (decl orelse continue) {
-                            .@"struct" => |@"struct"| @"struct".fields,
-                            .request => |request| request.fields,
-                            .reply => |reply| reply.fields,
-                        };
-
-                        field = try fields.addOne(self.gpa);
-                        field.?.* = .{ .pad = .{} };
-                    },
-                    .list => {
-                        const fields = switch (decl orelse continue) {
-                            .@"struct" => |@"struct"| @"struct".fields,
-                            .request => |request| request.fields,
-                            .reply => |reply| reply.fields,
-                        };
-
-                        field = try fields.addOne(self.gpa);
-                        field.?.* = .{ .list = .{} };
-                    },
-                    .fieldref => {},
-                    .@"enum" => {},
-                    .value => {},
-                    .item => {},
-                    .bit => {},
-                    .op => {},
-                    .doc => {
-                        while (parser.next()) |sub_event| if (sub_event == .close_tag and std.mem.eql(u8, sub_event.close_tag, @tagName(tag))) continue;
-                    },
-                    .brief, .description => {},
+                if (std.mem.eql(u8, tag_str, "doc")) {
+                    while (parser.next()) |sub_event| if (sub_event == .close_tag and std.mem.eql(u8, sub_event.close_tag, "doc")) continue;
                 }
+
+                const tag = std.meta.stringToEnum(std.meta.Tag(Node), tag_str) orelse std.debug.panic("invalid tag: {s}", .{tag_str});
+
+                const active_node = stack.getLastOrNull() orelse &self.tree.root;
+
+                const node: *Tree.Node = switch (tag) {
+                    // .doc, .brief, .description => continue,
+                    inline else => |comptime_tag| node: {
+                        const value = @unionInit(Tree.Node.Value, @tagName(comptime_tag), std.mem.zeroes(@FieldType(Tree.Node.Value, @tagName(comptime_tag))));
+                        break :node try active_node.addChild(self.gpa, value);
+                    },
+                };
+                try stack.append(self.gpa, node);
             },
             .close_tag => {
-                switch (tag) {
-                    .xcb => {
-                        protocol = null;
-                        decl = null;
-                        field = null;
+                _ = stack.pop();
+            },
+            .attribute => |attribute| {
+                const node = stack.getLastOrNull() orelse std.debug.panic("attribute '{s}' requires node", .{attribute.name});
+                switch (std.meta.activeTag(node.value)) {
+                    inline else => |tag| {
+                        const field_name = @tagName(tag);
+                        switch (@typeInfo(@FieldType(Tree.Node.Value, field_name))) {
+                            .@"struct" => {
+                                helper.assignFieldBySliceWithSlice(&@field(node.value, field_name), attribute.name, attribute.raw_value);
+                            },
+                            else => {},
+                        }
                     },
-                    .field, .pad, .list => {
-                        field = null;
-                    },
-                    else => {},
                 }
-                tag = .none;
             },
-            .attribute => |attribute| switch (tag) {
-                .xcb => helper.assignFieldFromSliceWithSlice(protocol.?, attribute.name, attribute.raw_value),
-                .@"struct" => helper.assignFieldFromSliceWithSlice(decl.?.@"struct", attribute.name, attribute.raw_value),
-                .request => helper.assignFieldFromSliceWithSlice(decl.?.request, attribute.name, attribute.raw_value),
-                .reply => helper.assignFieldFromSliceWithSlice(decl.?.reply, attribute.name, attribute.raw_value),
-                .field => helper.assignFieldFromSliceWithSlice(&field.?.normal, attribute.name, attribute.raw_value),
-                .pad => helper.assignFieldFromSliceWithSlice(&field.?.pad, attribute.name, attribute.raw_value),
-                .list => helper.assignFieldFromSliceWithSlice(&field.?.list, attribute.name, attribute.raw_value),
-                else => {},
-                // std.log.info("unhandled: {s}: {s}", .{ attribute.name, attribute.raw_value });
+            .character_data => |character_data| {
+                const node = stack.getLastOrNull() orelse std.debug.panic("character_data '{s}' requires node", .{character_data});
+
+                switch (std.meta.activeTag(node.value)) {
+                    inline else => |tag| {
+                        const field_name = @tagName(tag);
+                        const FieldType = @FieldType(Tree.Node.Value, field_name);
+                        if (helper.parseValue(FieldType, character_data)) |value| {
+                            @field(node.value, field_name) = value;
+                            continue;
+                        }
+
+                        _ = try node.addChild(self.gpa, .{ .character_data = character_data });
+                    },
+                }
             },
-            .character_data => {},
             else => {},
         };
     }
 
     pub fn emit(self: *@This(), w: *std.Io.Writer) !void {
-        for (self.protocols.items) |protocol| {
-            try w.print(
-                \\pub const {s} = struct {{
-                \\  pub const major_version = {d};
-                \\  pub const minor_version = {d};
-                \\  pub const extension_multiword = {};
-                \\
-                \\
-            , .{
-                protocol.header orelse
-                    protocol.@"extension-xname" orelse
-                    protocol.@"extension-name".?,
-                protocol.@"major-version",
-                protocol.@"minor-version",
-                protocol.@"extension-multiword",
-            });
-
-            try w.writeAll("pub const Opcode = enum(u8) {\n");
-            for (protocol.requests.items) |request| {
-                try w.print("{s} = {d},\n", .{ request.name, request.opcode });
-            }
-            try w.writeAll("};\n\n");
-
-            for (protocol.structs.items) |@"struct"| {
-                try w.print("pub const {s} = extern struct {{", .{@"struct".name});
-                try emitFields(w, @"struct".fields.items);
-                try w.writeAll("};\n\n");
-            }
-
-            for (protocol.requests.items) |request| {
-                try w.print(
-                    \\pub const {s} = extern struct {{
-                    \\  pub const opcode: Opcode = .{s}; 
-                    \\
-                    \\
-                , .{
-                    request.name,
-                    request.name,
-                });
-
-                try emitFields(w, request.fields.items);
-
-                if (request.reply) |reply| {
-                    try w.writeAll("\npub const Reply = extern struct {\n");
-                    try emitFields(w, reply.fields.items);
-                    try w.writeAll("};\n");
-                }
-
-                try w.writeAll("};\n\n");
-            }
-
-            try w.writeAll("};\n\n");
-        }
+        try self.emitNode(w, &self.tree.root);
     }
 
-    pub fn emitFields(w: *std.Io.Writer, fields: []Field) !void {
-        var pad_count: usize = 0;
-        for (fields) |field| switch (field) {
-            .normal => |normal| {
-                try w.print("{s}: {s},\n", .{ normal.name, normal.type });
+    pub fn emitNode(self: *@This(), w: *std.Io.Writer, node: *Tree.Node) !void {
+        switch (node.value) {
+            .xcb => |xcb| {
+                try w.print(
+                    \\pub const {s} = struct {{
+                    \\pub const major_version = {d};
+                    \\pub const minor_version = {d};
+                    \\
+                , .{ xcb.header, xcb.@"major-version", xcb.@"minor-version" });
+
+                try w.writeAll("pub const Opcode = enum(u8) {\n");
+                for (node.children.items) |child| if (child.value == .request) {
+                    const request = child.value.request;
+                    try w.print("{s} = {d},\n", .{ request.name, request.opcode });
+                };
+                try w.writeAll("};\n");
             },
-            .pad => |pad| {
-                if (pad.bytes == 1)
-                    try w.print("pad{d}: u8 = 0,\n", .{pad_count})
+            .import => |import| {
+                try w.print("// import {s}\n", .{import});
+            },
+            .@"struct" => |@"struct"| {
+                try w.print("pub const {s} = extern struct {{\n", .{@"struct".name});
+            },
+            .@"union" => |@"union"| {
+                try w.print("pub const {s} = extern struct {{\n", .{@"union".name});
+            },
+            .request => |request| {
+                try w.print("pub const {s} = extern struct {{\n", .{request.name});
+            },
+            .reply => {
+                try w.writeAll("pub const Reply = extern struct {\n");
+            },
+            .event => |event| {
+                try w.print("pub const {s} = extern struct {{\n", .{event.name});
+            },
+            .@"error" => |@"error"| {
+                try w.print("pub const {s} = extern struct {{\n", .{@"error".name});
+            },
+            .field => |field| {
+                std.debug.assert(node.children.items.len == 0);
+                try w.print("{s}: {s},\n", .{ field.name, "u32" });
+            },
+
+            .@"enum" => |@"enum"| {
+                const is_bitmask = node.children.items[0].value == .bit;
+                if (!is_bitmask)
+                    try w.print("pub const {s} = enum(u32) {{\n", .{@"enum".name})
                 else
-                    try w.print("pad{d}: [{d}]u8 = @splat(0),\n", .{ pad_count, pad.bytes });
-                pad_count += 1;
+                    try w.print("pub const {s} = packed struct {{\n", .{@"enum".name});
             },
-            .list => |list| {
-                _ = list;
-                // try w.print("{s} [*]{s}, // {s}\n", .{ list.name, list.type, "..." });
+            .item => |item| {
+                try w.writeAll(item.name);
+                switch (node.children.items[0].value) {
+                    .value => |value| {
+                        try w.print(" = {d},\n", .{value});
+                    },
+                    .bit => |bit| {
+                        try w.print(": bool = false, // {d}\n", .{bit});
+                    },
+                    else => unreachable,
+                }
             },
-        };
+            .value, .bit => {},
+
+            else => {
+                try w.print("// {any}\n", .{node.value});
+            },
+        }
+
+        for (node.children.items) |child| try self.emitNode(w, child);
+
+        switch (node.value) {
+            .xcb, .@"struct", .@"union", .request, .reply, .event, .@"error", .@"enum" => try w.writeAll("};\n\n"),
+            else => {},
+        }
     }
 };
 
+pub fn FamilyTree(NodeValue: type) type {
+    return struct {
+        root: Node,
+
+        pub const Node = struct {
+            parent: *Node,
+            value: NodeValue,
+            children: std.ArrayList(*Node) = .empty,
+
+            pub const Value = NodeValue;
+
+            pub fn addChild(self: *@This(), gpa: std.mem.Allocator, value: NodeValue) !*Node {
+                const child = try self.children.addOne(gpa);
+                child.* = try gpa.create(Node);
+                child.*.* = .{
+                    .parent = self,
+                    .value = value,
+                };
+                return child.*;
+            }
+
+            pub fn deinit(self: *@This(), gpa: std.mem.Allocator) void {
+                for (self.children.items) |child| {
+                    child.deinit(gpa);
+                    gpa.destroy(child);
+                }
+                self.children.deinit(gpa);
+            }
+        };
+
+        pub fn init(root: NodeValue) @This() {
+            return .{ .root = .{ .parent = undefined, .value = root } };
+        }
+
+        pub fn deinit(self: *@This(), gpa: std.mem.Allocator) void {
+            self.root.deinit(gpa);
+        }
+    };
+}
+
 pub const helper = struct {
-    pub fn assignFieldFromSliceWithSlice(lhs: anytype, field_name: []const u8, field_value: []const u8) void {
-        if (@typeInfo(@TypeOf(lhs)) != .pointer) @compileError("cannot not mutate non pointer type");
+    pub fn assignFieldBySliceWithSlice(lhs: anytype, field_name: []const u8, field_value: []const u8) void {
+        if (@typeInfo(@TypeOf(lhs)) != .pointer) @compileError("cannot mutate non pointer type");
         inline for (std.meta.fields(std.meta.Child(@TypeOf(lhs)))) |field| {
             if (std.mem.eql(u8, field.name, field_name)) {
                 if (parseValue(field.type, field_value)) |value| @field(lhs.*, field.name) = value;
