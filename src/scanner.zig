@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const log = std.log.scoped(.@"zig-xcb");
+const log = std.log.scoped(.@"xcb-scanner");
 
 const xml = @import("xml.zig");
 
@@ -35,8 +35,8 @@ pub fn main(init: std.process.Init) !void {
         documents.deinit(gpa);
     }
 
-    var xml_deserializer: XmlDeserializer = .init(gpa);
-    defer xml_deserializer.deinit();
+    var protocol_parser: ProtocolParser = .init(gpa);
+    defer protocol_parser.deinit();
 
     for (protocols.items, 0..) |protocol, i| {
         var protocol_file = try std.Io.Dir.openFileAbsolute(io, protocol, .{});
@@ -46,9 +46,13 @@ pub fn main(init: std.process.Init) !void {
         try documents.append(gpa, document);
 
         var parser: xml.Parser = .init(document);
-        std.log.info("[{d}/{d}] {s}", .{ i + 1, protocols.items.len, std.Io.Dir.path.basename(protocol) });
-        try xml_deserializer.parse(&parser);
+        log.info("[{d}/{d}] {s}", .{ i + 1, protocols.items.len, std.Io.Dir.path.basename(protocol) });
+        try protocol_parser.parse(&parser);
     }
+
+    var ir: Ir = .init(gpa);
+    defer ir.deinit();
+    try ir.parse(protocol_parser);
 
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     const writer = &buffer.writer;
@@ -60,7 +64,9 @@ pub fn main(init: std.process.Init) !void {
     try writer.writeAll(@embedFile("core.zig"));
     try writer.writeByte('\n');
 
-    try xml_deserializer.emit(writer);
+    const emitter = try ir.emitter(writer);
+    try emitter.emit();
+    emitter.deinit();
 
     const generated = try buffer.toOwnedSliceSentinel(0);
     defer gpa.free(generated);
@@ -74,7 +80,7 @@ pub fn main(init: std.process.Init) !void {
     if (zig_tree.errors.len != 0) {
         try std.zig.printAstErrorsToStderr(gpa, io, zig_tree, out_path, .auto);
         try out_file.writeStreamingAll(io, generated);
-        return error.ParseError;
+        return error.EmitError;
     }
 
     var out_buf: [4096]u8 = undefined;
@@ -83,15 +89,20 @@ pub fn main(init: std.process.Init) !void {
     try zig_tree.render(gpa, &out_writer.interface, .{});
 
     try out_writer.interface.flush();
+
+    var usage: std.os.linux.rusage = undefined;
+    _ = std.os.linux.getrusage(std.os.linux.rusage.SELF, &usage);
+    log.info("max RSS: {d}\n", .{usage.maxrss});
 }
 
-pub const XmlDeserializer = struct {
+pub const ProtocolParser = struct {
     gpa: std.mem.Allocator,
     tree: Tree,
 
-    pub const Tree = FamilyTree(Node);
+    pub const Tree = FamilyTree(NodeValue);
+    pub const Node = Tree.Node;
 
-    pub const Node = union(enum) {
+    pub const NodeValue = union(enum) {
         root,
         xcb: struct {
             header: []const u8 = "invalid",
@@ -110,7 +121,7 @@ pub const XmlDeserializer = struct {
         enumref: struct { ref: []const u8 },
         item: Name,
         value: u64,
-        bit: u64,
+        bit: u8,
         @"struct": Name,
         @"union": Name,
         request: struct { name: []const u8, opcode: u8 },
@@ -189,7 +200,7 @@ pub const XmlDeserializer = struct {
                     while (parser.next()) |sub_event| if (sub_event == .close_tag and std.mem.eql(u8, sub_event.close_tag, "doc")) continue;
                 }
 
-                const tag = std.meta.stringToEnum(std.meta.Tag(Node), tag_str) orelse std.debug.panic("invalid tag: {s}", .{tag_str});
+                const tag = std.meta.stringToEnum(std.meta.Tag(NodeValue), tag_str) orelse std.debug.panic("invalid tag: {s}", .{tag_str});
 
                 const active_node = stack.getLastOrNull() orelse &self.tree.root;
 
@@ -238,86 +249,423 @@ pub const XmlDeserializer = struct {
             else => {},
         };
     }
+};
 
-    pub fn emit(self: *@This(), w: *std.Io.Writer) !void {
-        try self.emitNode(w, &self.tree.root);
+/// Intermediate Representation
+pub const Ir = struct {
+    gpa: std.mem.Allocator,
+    protocols: std.ArrayList(Protocol) = .empty,
+
+    pub const Protocol = struct {
+        name: []const u8,
+        major_version: u8,
+        minor_version: u8,
+
+        xids: std.ArrayList(Xid) = .empty,
+        enums: std.ArrayList(Enum) = .empty,
+        bitmasks: std.ArrayList(Bitmask) = .empty,
+        unions: std.ArrayList(Union) = .empty,
+        structs: std.ArrayList(Struct) = .empty,
+        events: std.ArrayList(Event) = .empty,
+        requests: std.ArrayList(Request) = .empty,
+
+        pub const Xid = struct {
+            name: []const u8,
+        };
+
+        pub const Field = union(enum) {
+            basic: Basic,
+            pad: u8,
+            list: struct {
+                name: []const u8,
+                type: []const u8,
+                ref: Ref,
+            },
+
+            pub const Basic = struct {
+                name: []const u8,
+                type: []const u8,
+            };
+
+            pub const Ref = union(enum) {
+                field: *Field,
+                expression: void,
+            };
+        };
+
+        pub const Enum = struct {
+            name: []const u8,
+            fields: std.ArrayList(@This().Field) = .empty,
+            /// null when generic/unknown
+            tag_type: ?[]const u8 = null,
+
+            pub const Field = struct {
+                name: []const u8,
+                value: u64,
+            };
+        };
+
+        pub const Bitmask = struct {
+            name: []const u8,
+            fields: std.ArrayList(@This().Field) = .empty,
+            tag_type: ?[]const u8 = null,
+
+            pub const Field = struct {
+                name: []const u8,
+                bit: u8,
+            };
+        };
+
+        pub const Union = struct {
+            name: []const u8,
+            fields: std.ArrayList(Field.Basic) = .empty,
+        };
+
+        pub const Struct = struct {
+            name: []const u8,
+            fields: std.ArrayList(Field) = .empty,
+        };
+
+        pub const Event = struct {
+            name: []const u8,
+            number: u32,
+            fields: std.ArrayList(Field) = .empty,
+        };
+
+        pub const Request = struct {
+            name: []const u8,
+            opcode: u8,
+            fields: std.ArrayList(Field) = .empty,
+            reply: ?Reply = null,
+
+            pub const Reply = struct {
+                fields: std.ArrayList(Field) = .empty,
+            };
+        };
+    };
+
+    pub fn init(gpa: std.mem.Allocator) @This() {
+        return .{ .gpa = gpa };
     }
 
-    pub fn emitNode(self: *@This(), w: *std.Io.Writer, node: *Tree.Node) !void {
-        switch (node.value) {
-            .xcb => |xcb| {
-                try w.print(
-                    \\pub const {s} = struct {{
-                    \\pub const major_version = {d};
-                    \\pub const minor_version = {d};
-                    \\
-                , .{ xcb.header, xcb.@"major-version", xcb.@"minor-version" });
+    pub fn deinit(self: *@This()) void {
+        for (self.protocols.items) |*protocol| {
+            for (protocol.enums.items) |*@"enum"| @"enum".fields.deinit(self.gpa);
+            for (protocol.bitmasks.items) |*bitmask| bitmask.fields.deinit(self.gpa);
+            for (protocol.unions.items) |*@"union"| @"union".fields.deinit(self.gpa);
+            for (protocol.structs.items) |*@"struct"| @"struct".fields.deinit(self.gpa);
+            for (protocol.events.items) |*event| event.fields.deinit(self.gpa);
+            for (protocol.requests.items) |*request| request.fields.deinit(self.gpa);
 
-                try w.writeAll("pub const Opcode = enum(u8) {\n");
-                for (node.children.items) |child| if (child.value == .request) {
-                    const request = child.value.request;
-                    try w.print("{s} = {d},\n", .{ request.name, request.opcode });
-                };
-                try w.writeAll("};\n");
-            },
-            .import => |import| {
-                try w.print("// import {s}\n", .{import});
-            },
-            .@"struct" => |@"struct"| {
-                try w.print("pub const {s} = extern struct {{\n", .{@"struct".name});
-            },
-            .@"union" => |@"union"| {
-                try w.print("pub const {s} = extern struct {{\n", .{@"union".name});
-            },
-            .request => |request| {
-                try w.print("pub const {s} = extern struct {{\n", .{request.name});
-            },
-            .reply => {
-                try w.writeAll("pub const Reply = extern struct {\n");
-            },
-            .event => |event| {
-                try w.print("pub const {s} = extern struct {{\n", .{event.name});
-            },
-            .@"error" => |@"error"| {
-                try w.print("pub const {s} = extern struct {{\n", .{@"error".name});
-            },
-            .field => |field| {
-                std.debug.assert(node.children.items.len == 0);
-                try w.print("{s}: {s},\n", .{ field.name, "u32" });
-            },
-
-            .@"enum" => |@"enum"| {
-                const is_bitmask = node.children.items[0].value == .bit;
-                if (!is_bitmask)
-                    try w.print("pub const {s} = enum(u32) {{\n", .{@"enum".name})
-                else
-                    try w.print("pub const {s} = packed struct {{\n", .{@"enum".name});
-            },
-            .item => |item| {
-                try w.writeAll(item.name);
-                switch (node.children.items[0].value) {
-                    .value => |value| {
-                        try w.print(" = {d},\n", .{value});
-                    },
-                    .bit => |bit| {
-                        try w.print(": bool = false, // {d}\n", .{bit});
-                    },
-                    else => unreachable,
-                }
-            },
-            .value, .bit => {},
-
-            else => {
-                try w.print("// {any}\n", .{node.value});
-            },
+            protocol.xids.deinit(self.gpa);
+            protocol.enums.deinit(self.gpa);
+            protocol.bitmasks.deinit(self.gpa);
+            protocol.unions.deinit(self.gpa);
+            protocol.structs.deinit(self.gpa);
+            protocol.events.deinit(self.gpa);
+            protocol.requests.deinit(self.gpa);
         }
+        self.protocols.deinit(self.gpa);
+    }
 
-        for (node.children.items) |child| try self.emitNode(w, child);
+    pub fn emitter(self: @This(), writer: *std.Io.Writer) !IrEmitter {
+        const names = try self.gpa.create(IrEmitter.NamePool);
+        names.* = .{ .arena = .init(self.gpa) };
 
-        switch (node.value) {
-            .xcb, .@"struct", .@"union", .request, .reply, .event, .@"error", .@"enum" => try w.writeAll("};\n\n"),
+        return .{
+            .gpa = self.gpa,
+            .writer = writer,
+            .ir = &self,
+            .names = names,
+        };
+    }
+
+    pub fn parse(self: *@This(), parser: ProtocolParser) !void {
+        for (parser.tree.root.children.items) |child| {
+            try self.parseProtocol(child);
+        }
+    }
+
+    pub fn parseProtocol(self: *@This(), node: *ProtocolParser.Node) !void {
+        std.debug.assert(node.value == .xcb);
+        const xcb = node.value.xcb;
+        const protocol = try self.protocols.addOne(self.gpa);
+        protocol.* = .{
+            .name = xcb.header,
+            .major_version = xcb.@"major-version",
+            .minor_version = xcb.@"minor-version",
+        };
+
+        for (node.children.items) |child| switch (child.value) {
+            .xidtype => try protocol.xids.append(self.gpa, try self.parseXid(child)),
+            .@"enum" => try protocol.enums.append(self.gpa, try self.parseEnum(child)),
+            .@"union" => try protocol.unions.append(self.gpa, try self.parseUnion(child)),
+            .@"struct" => try protocol.structs.append(self.gpa, try self.parseStruct(child)),
+            .event => try protocol.events.append(self.gpa, try self.parseEvent(child)),
+            .request => try protocol.requests.append(self.gpa, try self.parseRequest(child)),
             else => {},
+        };
+    }
+    pub fn parseXid(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Xid {
+        _ = self;
+        const value = node.value.xidtype;
+        return .{ .name = value.name };
+    }
+    pub fn parseEnum(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Enum {
+        _ = self;
+        const value = node.value.@"enum";
+        return .{ .name = value.name };
+    }
+    pub fn parseBitmask(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Bitmask {
+        _ = self;
+        const value = node.value.@"enum";
+        return .{ .name = value.name };
+    }
+    pub fn parseUnion(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Union {
+        _ = self;
+        const value = node.value.@"union";
+        return .{ .name = value.name };
+    }
+    pub fn parseStruct(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Struct {
+        const value = node.value.@"struct";
+        const fields = try self.parseFields(node);
+        return .{ .name = value.name, .fields = fields };
+    }
+    pub fn parseEvent(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Event {
+        const value = node.value.event;
+        const fields = try self.parseFields(node);
+        return .{ .name = value.name, .number = value.number, .fields = fields };
+    }
+    pub fn parseRequest(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Request {
+        const value = node.value.request;
+        const fields = try self.parseFields(node);
+        return .{ .name = value.name, .opcode = value.opcode, .fields = fields };
+    }
+    pub fn parseFields(self: @This(), parent: *ProtocolParser.Node) !std.ArrayList(Ir.Protocol.Field) {
+        var fields: std.ArrayList(Ir.Protocol.Field) = try .initCapacity(self.gpa, parent.children.items.len);
+        for (parent.children.items) |child| switch (child.value) {
+            .field => |field| try fields.append(self.gpa, .{ .basic = .{ .name = field.name, .type = field.type } }),
+            .pad => |pad| try fields.append(self.gpa, .{ .pad = pad.bytes }),
+            .list => |list| {
+                try fields.append(self.gpa, .{ .list = .{ .name = list.name, .type = list.type, .ref = .expression } });
+            },
+            .fd => |fd| try fields.append(self.gpa, .{ .basic = .{ .name = fd.name, .type = "std.posix.fd_t" } }),
+
+            else => {},
+        };
+        return fields;
+    }
+};
+
+pub const IrEmitter = struct {
+    gpa: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    ir: *const Ir,
+    names: *NamePool,
+
+    pub const NamePool = struct {
+        arena: std.heap.ArenaAllocator,
+
+        pub const zig_keywords: []const [:0]const u8 = &.{
+            "error",
+            "suspend",
+        };
+
+        pub fn snakeCase(self: *@This(), name: []const u8) ![]u8 {
+            const gpa = self.arena.allocator();
+            var buf = try std.ArrayList(u8).initCapacity(gpa, name.len + 4);
+
+            for (name, 0..) |c, i| {
+                if (!std.ascii.isAlphanumeric(c)) {
+                    if (buf.items.len > 0 and buf.items[buf.items.len - 1] != '_') try buf.append(gpa, '_');
+                    continue;
+                }
+
+                if (i != 0 and std.ascii.isUpper(c) and buf.items[buf.items.len - 1] != '_') try buf.append(gpa, '_');
+
+                try buf.append(gpa, std.ascii.toLower(c));
+            }
+
+            for (zig_keywords) |keyword| if (std.mem.eql(u8, buf.items, keyword)) {
+                defer buf.deinit(gpa);
+
+                const quoted_len = buf.items.len + 3;
+                var quoted = try gpa.alloc(u8, quoted_len);
+
+                @memcpy(quoted[0..2], "@\"");
+                @memcpy(quoted[2 .. quoted_len - 1], buf.items.ptr);
+                quoted[quoted_len - 1] = '"';
+
+                return quoted;
+            };
+
+            return buf.toOwnedSlice(gpa);
         }
+
+        pub fn camelCase(self: *@This(), name: []const u8) ![]u8 {
+            const gpa = self.arena.allocator();
+            var buf = try std.ArrayList(u8).initCapacity(gpa, name.len);
+
+            var upper_next = false;
+            for (name, 0..) |c, i| {
+                if (!std.ascii.isAlphanumeric(c)) {
+                    upper_next = true;
+                    continue;
+                }
+
+                const out = if (i == 0) std.ascii.toLower(c) else if (upper_next) std.ascii.toUpper(c) else c;
+
+                try buf.append(gpa, out);
+                upper_next = false;
+            }
+
+            return buf.toOwnedSlice(gpa);
+        }
+
+        pub fn pascalCase(self: *@This(), name: []const u8) ![]u8 {
+            const camel = try self.camelCase(name);
+            if (camel.len == 0) return camel;
+            camel[0] = std.ascii.toUpper(camel[0]);
+            return camel;
+        }
+
+        pub fn screamingCase(self: *@This(), name: []const u8) ![]u8 {
+            const snake_case = try self.snakeCase(name);
+            for (snake_case) |*char| char = std.ascii.toUpper(char);
+            return snake_case;
+        }
+    };
+
+    pub fn deinit(self: @This()) void {
+        self.names.arena.deinit();
+        self.gpa.destroy(self.names);
+    }
+
+    pub fn emit(self: @This()) !void {
+        for (self.ir.protocols.items) |protocol| {
+            try self.emitProtocol(protocol);
+        }
+    }
+
+    pub fn emitBlockEnd(self: @This()) !void {
+        const w = self.writer;
+        try w.writeAll("};\n\n");
+    }
+
+    pub fn emitProtocol(self: @This(), protocol: Ir.Protocol) !void {
+        const w = self.writer;
+        try w.print(
+            \\pub const {s} = struct {{
+            \\  pub const major_version = {d};
+            \\  pub const minor_version = {d};
+            \\
+            \\
+        , .{
+            try self.names.snakeCase(protocol.name),
+            protocol.major_version,
+            protocol.minor_version,
+        });
+
+        try w.writeAll("pub const Opcode = enum(u8) {\n");
+        for (protocol.requests.items) |request| {
+            const opcode_name = try self.names.snakeCase(request.name);
+            try w.print("{s} = {d},\n", .{ opcode_name, request.opcode });
+        }
+        try self.emitBlockEnd();
+
+        for (protocol.xids.items) |xid| try self.emitXid(xid);
+        for (protocol.enums.items) |@"enum"| try self.emitEnum(@"enum");
+        for (protocol.bitmasks.items) |bitmask| try self.emitBitmask(bitmask);
+        for (protocol.unions.items) |@"union"| try self.emitUnion(@"union");
+        for (protocol.structs.items) |@"struct"| try self.emitStruct(@"struct");
+        for (protocol.events.items) |event| try self.emitEvent(event);
+        for (protocol.requests.items) |request| try self.emitRequest(request);
+
+        try self.emitBlockEnd();
+    }
+    pub fn emitXid(self: @This(), xid: Ir.Protocol.Xid) !void {
+        const w = self.writer;
+        const name = try self.names.pascalCase(xid.name);
+        try w.print("pub const {s} = enum(u32) {{_,", .{name});
+        try self.emitBlockEnd();
+    }
+    pub fn emitEnum(self: @This(), @"enum": Ir.Protocol.Enum) !void {
+        const w = self.writer;
+        const name = try self.names.pascalCase(@"enum".name);
+        if (@"enum".tag_type) |tag_type| {
+            try w.print("pub const {s} = enum({s}) {{\n", .{ name, tag_type });
+        } else {
+            try w.print(
+                \\pub fn {s}(Tag: type) type {{
+                \\  return enum(Tag) {{
+                \\
+            , .{name});
+        }
+
+        for (@"enum".fields.items) |field| {
+            try w.print("{s} = {d},\n", .{ field.name, field.value });
+        }
+
+        if (@"enum".tag_type != null)
+            try self.emitBlockEnd()
+        else
+            try w.writeAll("};\n}\n\n");
+    }
+    pub fn emitBitmask(self: @This(), bitmask: Ir.Protocol.Bitmask) !void {
+        _ = self;
+        _ = bitmask;
+    }
+    pub fn emitUnion(self: @This(), @"union": Ir.Protocol.Union) !void {
+        const w = self.writer;
+        const name = try self.names.pascalCase(@"union".name);
+        try w.print("pub const {s} = extern union {{\n", .{name});
+
+        for (@"union".fields.items) |field| {
+            const field_name = try self.names.snakeCase(field.name);
+            try w.print("{s}: {s},\n", .{ field_name, field.type });
+        }
+
+        try self.emitBlockEnd();
+    }
+    pub fn emitStruct(self: @This(), @"struct": Ir.Protocol.Struct) !void {
+        const w = self.writer;
+        const name = try self.names.pascalCase(@"struct".name);
+        try w.print("pub const {s} = extern struct {{\n", .{name});
+        try self.emitFields(@"struct".fields.items);
+        try self.emitBlockEnd();
+    }
+    pub fn emitEvent(self: @This(), event: Ir.Protocol.Event) !void {
+        _ = self;
+        _ = event;
+    }
+    pub fn emitRequest(self: @This(), request: Ir.Protocol.Request) !void {
+        const w = self.writer;
+        const name = try self.names.pascalCase(request.name);
+        const opcode_name = try self.names.snakeCase(request.name);
+        try w.print("pub const {s}Request = extern struct {{\n", .{name});
+        try self.emitFields(request.fields.items);
+        try w.writeByte('\n');
+        try w.print("pub const opcode: Opcode = .{s};\n", .{opcode_name});
+        try self.emitBlockEnd();
+    }
+
+    pub fn emitFields(self: @This(), fields: []Ir.Protocol.Field) !void {
+        const w = self.writer;
+        var pad_field_count: usize = 0;
+        for (fields) |field| switch (field) {
+            .basic => |basic| {
+                const name = try self.names.snakeCase(basic.name);
+                try w.print("{s}: {s},\n", .{ name, basic.type });
+            },
+            .pad => |pad| {
+                try w.print("pad{d}: [{d}]u8 = @splat(0),\n", .{ pad_field_count, pad });
+                pad_field_count += 1;
+            },
+            .list => |list| {
+                const name = try self.names.snakeCase(list.name);
+                try w.print("{s}_ptr: [*]{s},\n", .{ name, list.type });
+            },
+        };
     }
 };
 

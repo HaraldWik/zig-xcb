@@ -27,7 +27,6 @@ pub fn build(b: *std.Build) void {
             "xproto.xml",   "xv.xml",
         },
     });
-    // .{ .xcb_xml = xproto.path("src"), }
 
     const xau = b.addLibrary(.{
         .name = "xau",
