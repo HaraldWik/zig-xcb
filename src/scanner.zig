@@ -38,7 +38,7 @@ pub fn main(init: std.process.Init) !void {
     var protocol_parser: ProtocolParser = .init(gpa);
     defer protocol_parser.deinit();
 
-    for (protocols.items, 0..) |protocol, i| {
+    for (protocols.items) |protocol| {
         var protocol_file = try std.Io.Dir.openFileAbsolute(io, protocol, .{});
         defer protocol_file.close(io);
         var file_reader = protocol_file.reader(io, &.{});
@@ -46,7 +46,6 @@ pub fn main(init: std.process.Init) !void {
         try documents.append(gpa, document);
 
         var parser: xml.Parser = .init(document);
-        log.info("[{d}/{d}] {s}", .{ i + 1, protocols.items.len, std.Io.Dir.path.basename(protocol) });
         try protocol_parser.parse(&parser);
     }
 
@@ -135,10 +134,10 @@ pub const ProtocolParser = struct {
         @"error": struct { name: []const u8, number: u32 },
         errorcopy: Copy,
 
-        field: Field,
+        field: Field.Basic,
         fieldref: []const u8,
         pad: struct { bytes: u8 },
-        list: Field,
+        list: Field.Basic,
         length: void,
         fd: Name,
         exprfield: Field,
@@ -165,7 +164,17 @@ pub const ProtocolParser = struct {
         character_data: []const u8,
 
         pub const Name = struct { name: []const u8 };
-        pub const Field = struct { name: []const u8, type: []const u8 };
+        pub const Field = struct {
+            name: []const u8,
+            type: []const u8,
+            pub const Basic = struct {
+                name: []const u8,
+                type: []const u8,
+                mask: ?[]const u8 = null,
+                @"enum": ?[]const u8 = null,
+                altenum: ?[]const u8 = null,
+            };
+        };
         pub const Copy = struct { name: []const u8, number: u32, ref: []const u8 };
 
         pub const Op = enum(u8) {
@@ -258,6 +267,7 @@ pub const Ir = struct {
 
     pub const Protocol = struct {
         name: []const u8,
+        extension_name: ?[]const u8 = null,
         major_version: u8,
         minor_version: u8,
 
@@ -279,25 +289,33 @@ pub const Ir = struct {
             list: struct {
                 name: []const u8,
                 type: []const u8,
+                extra: Extra = .none,
                 ref: Ref,
             },
 
             pub const Basic = struct {
                 name: []const u8,
                 type: []const u8,
+                extra: Extra = .none,
             };
 
             pub const Ref = union(enum) {
                 field: *Field,
                 expression: void,
             };
+
+            pub const Extra = union(enum) {
+                none: void,
+                @"enum": *Enum,
+                bitmask: *Bitmask,
+            };
         };
 
         pub const Enum = struct {
             name: []const u8,
             fields: std.ArrayList(@This().Field) = .empty,
-            /// null when generic/unknown
             tag_type: ?[]const u8 = null,
+            is_generic: bool = false,
 
             pub const Field = struct {
                 name: []const u8,
@@ -308,12 +326,15 @@ pub const Ir = struct {
         pub const Bitmask = struct {
             name: []const u8,
             fields: std.ArrayList(@This().Field) = .empty,
+            predefines: std.ArrayList(Predefine) = .empty,
             tag_type: ?[]const u8 = null,
 
             pub const Field = struct {
                 name: []const u8,
                 bit: u8,
             };
+
+            pub const Predefine = Enum.Field;
         };
 
         pub const Union = struct {
@@ -351,7 +372,10 @@ pub const Ir = struct {
     pub fn deinit(self: *@This()) void {
         for (self.protocols.items) |*protocol| {
             for (protocol.enums.items) |*@"enum"| @"enum".fields.deinit(self.gpa);
-            for (protocol.bitmasks.items) |*bitmask| bitmask.fields.deinit(self.gpa);
+            for (protocol.bitmasks.items) |*bitmask| {
+                bitmask.fields.deinit(self.gpa);
+                bitmask.predefines.deinit(self.gpa);
+            }
             for (protocol.unions.items) |*@"union"| @"union".fields.deinit(self.gpa);
             for (protocol.structs.items) |*@"struct"| @"struct".fields.deinit(self.gpa);
             for (protocol.events.items) |*event| event.fields.deinit(self.gpa);
@@ -388,23 +412,46 @@ pub const Ir = struct {
 
     pub fn parseProtocol(self: *@This(), node: *ProtocolParser.Node) !void {
         std.debug.assert(node.value == .xcb);
-        const xcb = node.value.xcb;
+        const value = node.value.xcb;
         const protocol = try self.protocols.addOne(self.gpa);
         protocol.* = .{
-            .name = xcb.header,
-            .major_version = xcb.@"major-version",
-            .minor_version = xcb.@"minor-version",
+            .name = value.header,
+            .extension_name = value.@"extension-xname" orelse value.@"extension-name",
+            .major_version = value.@"major-version",
+            .minor_version = value.@"minor-version",
         };
 
         for (node.children.items) |child| switch (child.value) {
             .xidtype => try protocol.xids.append(self.gpa, try self.parseXid(child)),
-            .@"enum" => try protocol.enums.append(self.gpa, try self.parseEnum(child)),
+            .@"enum" => {
+                var is_enum: bool = true;
+                for (child.children.items) |child_child| {
+                    if (child_child.children.items.len == 0) continue;
+                    if (child_child.children.items[0].value == .bit) is_enum = false;
+                }
+                if (is_enum)
+                    try protocol.enums.append(self.gpa, try self.parseEnum(child))
+                else
+                    try protocol.bitmasks.append(self.gpa, try self.parseBitmask(child));
+            },
             .@"union" => try protocol.unions.append(self.gpa, try self.parseUnion(child)),
             .@"struct" => try protocol.structs.append(self.gpa, try self.parseStruct(child)),
             .event => try protocol.events.append(self.gpa, try self.parseEvent(child)),
             .request => try protocol.requests.append(self.gpa, try self.parseRequest(child)),
             else => {},
         };
+
+        try self.polishEnumAndBitmask();
+
+        for (protocol.enums.items) |*@"enum"| {
+            if (@"enum".tag_type == null) @"enum".is_generic = true;
+        }
+        for (protocol.enums.items) |e| {
+            log.info("({s}) enum {s}: {s}", .{ protocol.name, e.name, if (e.is_generic) "(generic)" else e.tag_type.? });
+        }
+        for (protocol.bitmasks.items) |e| {
+            log.info("({s}) bitmask {s}: {s}", .{ protocol.name, e.name, e.tag_type orelse "(missing tag)" });
+        }
     }
     pub fn parseXid(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Xid {
         _ = self;
@@ -412,19 +459,43 @@ pub const Ir = struct {
         return .{ .name = value.name };
     }
     pub fn parseEnum(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Enum {
-        _ = self;
         const value = node.value.@"enum";
-        return .{ .name = value.name };
+        var fields: std.ArrayList(Ir.Protocol.Enum.Field) = .empty;
+        for (node.children.items) |child| {
+            if (child.value != .item) continue;
+            const field = child.value.item;
+            if (child.children.items[0].value != .value) {
+                log.err("({s}) {s} = {d}", .{ node.parent.value.xcb.header, child.value.item.name, child.children.items[0].value.bit });
+            }
+            const field_value = child.children.items[0].value.value;
+            try fields.append(self.gpa, .{ .name = field.name, .value = field_value });
+        }
+        return .{ .name = value.name, .fields = fields };
     }
     pub fn parseBitmask(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Bitmask {
-        _ = self;
         const value = node.value.@"enum";
-        return .{ .name = value.name };
+        var fields: std.ArrayList(Ir.Protocol.Bitmask.Field) = .empty;
+        var predefines: std.ArrayList(Ir.Protocol.Bitmask.Predefine) = .empty;
+        for (node.children.items) |child| {
+            if (child.value != .item) continue;
+            const field = child.value.item;
+            const field_value = child.children.items[0].value;
+            switch (field_value) {
+                .bit => try fields.append(self.gpa, .{ .name = field.name, .bit = field_value.bit }),
+                .value => try predefines.append(self.gpa, .{ .name = field.name, .value = field_value.value }),
+                else => unreachable,
+            }
+        }
+        return .{ .name = value.name, .fields = fields, .predefines = predefines };
     }
     pub fn parseUnion(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Union {
-        _ = self;
         const value = node.value.@"union";
-        return .{ .name = value.name };
+        var fields: std.ArrayList(Protocol.Field.Basic) = .empty;
+        for (node.children.items) |child| {
+            const child_value = child.value.field;
+            try fields.append(self.gpa, .{ .name = child_value.name, .type = child_value.type });
+        }
+        return .{ .name = value.name, .fields = fields };
     }
     pub fn parseStruct(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Struct {
         const value = node.value.@"struct";
@@ -446,14 +517,44 @@ pub const Ir = struct {
         for (parent.children.items) |child| switch (child.value) {
             .field => |field| try fields.append(self.gpa, .{ .basic = .{ .name = field.name, .type = field.type } }),
             .pad => |pad| try fields.append(self.gpa, .{ .pad = pad.bytes }),
-            .list => |list| {
-                try fields.append(self.gpa, .{ .list = .{ .name = list.name, .type = list.type, .ref = .expression } });
-            },
+            .list => |list| try fields.append(self.gpa, .{ .list = .{ .name = list.name, .type = list.type, .ref = .expression } }),
             .fd => |fd| try fields.append(self.gpa, .{ .basic = .{ .name = fd.name, .type = "std.posix.fd_t" } }),
-
             else => {},
         };
         return fields;
+    }
+
+    pub fn polishEnumAndBitmask(self: @This()) !void {
+        const protocol = self.protocols.getLast();
+
+        for (protocol.unions.items) |@"union"| {
+            for (@"union".fields.items) |*field| field.extra = try self.polishEnumAndBitmaskViaField(field.name, field.type);
+        }
+        for (protocol.structs.items) |@"struct"| {
+            try self.polishEnumAndBitmaskViaFields(@"struct".fields.items);
+        }
+        for (protocol.events.items) |event| {
+            try self.polishEnumAndBitmaskViaFields(event.fields.items);
+        }
+        for (protocol.requests.items) |request| {
+            try self.polishEnumAndBitmaskViaFields(request.fields.items);
+            if (request.reply) |reply| try self.polishEnumAndBitmaskViaFields(reply.fields.items);
+        }
+    }
+
+    pub fn polishEnumAndBitmaskViaFields(self: @This(), fields: []Protocol.Field) !void {
+        for (fields) |*field| switch (field.*) {
+            .basic => field.basic.extra = try self.polishEnumAndBitmaskViaField(field.basic.name, field.basic.type),
+            .pad => {},
+            .list => field.list.extra = try self.polishEnumAndBitmaskViaField(field.list.name, field.list.type),
+        };
+    }
+
+    pub fn polishEnumAndBitmaskViaField(self: @This(), name: []const u8, @"type": []const u8) !Protocol.Field.Extra {
+        _ = self;
+        _ = name;
+        _ = @"type";
+        return .none;
     }
 };
 
@@ -477,16 +578,28 @@ pub const IrEmitter = struct {
 
             for (name, 0..) |c, i| {
                 if (!std.ascii.isAlphanumeric(c)) {
-                    if (buf.items.len > 0 and buf.items[buf.items.len - 1] != '_') try buf.append(gpa, '_');
+                    if (buf.items.len > 0 and buf.items[buf.items.len - 1] != '_')
+                        try buf.append(gpa, '_');
                     continue;
                 }
 
-                if (i != 0 and std.ascii.isUpper(c) and buf.items[buf.items.len - 1] != '_') try buf.append(gpa, '_');
+                if (i != 0 and std.ascii.isUpper(c) and buf.items.len > 0 and buf.items[buf.items.len - 1] != '_') {
+                    const prev = name[i - 1];
+                    const next_is_lower = (i + 1 < name.len) and std.ascii.isLower(name[i + 1]);
+
+                    if (std.ascii.isLower(prev) or next_is_lower) try buf.append(gpa, '_');
+                }
 
                 try buf.append(gpa, std.ascii.toLower(c));
             }
 
-            for (zig_keywords) |keyword| if (std.mem.eql(u8, buf.items, keyword)) {
+            var is_quoted: bool = std.ascii.isDigit(name[0]);
+
+            if (!is_quoted) is_quoted = for (zig_keywords) |keyword| {
+                if (std.mem.eql(u8, buf.items, keyword)) break true;
+            } else false;
+
+            if (is_quoted) {
                 defer buf.deinit(gpa);
 
                 const quoted_len = buf.items.len + 3;
@@ -497,7 +610,7 @@ pub const IrEmitter = struct {
                 quoted[quoted_len - 1] = '"';
 
                 return quoted;
-            };
+            }
 
             return buf.toOwnedSlice(gpa);
         }
@@ -554,6 +667,7 @@ pub const IrEmitter = struct {
 
     pub fn emitProtocol(self: @This(), protocol: Ir.Protocol) !void {
         const w = self.writer;
+        if (protocol.extension_name) |name| try w.print("/// {s}\n", .{name});
         try w.print(
             \\pub const {s} = struct {{
             \\  pub const major_version = {d};
@@ -566,12 +680,8 @@ pub const IrEmitter = struct {
             protocol.minor_version,
         });
 
-        try w.writeAll("pub const Opcode = enum(u8) {\n");
-        for (protocol.requests.items) |request| {
-            const opcode_name = try self.names.snakeCase(request.name);
-            try w.print("{s} = {d},\n", .{ opcode_name, request.opcode });
-        }
-        try self.emitBlockEnd();
+        try self.emitOpcodeEnum(protocol.requests.items);
+        try self.emitEventNumberEnum(protocol.events.items);
 
         for (protocol.xids.items) |xid| try self.emitXid(xid);
         for (protocol.enums.items) |@"enum"| try self.emitEnum(@"enum");
@@ -583,6 +693,26 @@ pub const IrEmitter = struct {
 
         try self.emitBlockEnd();
     }
+    pub fn emitOpcodeEnum(self: @This(), requests: []Ir.Protocol.Request) !void {
+        if (requests.len == 0) return;
+        const w = self.writer;
+        try w.writeAll("pub const Opcode = enum(u8) {\n");
+        for (requests) |request| {
+            const field_name = try self.names.snakeCase(request.name);
+            try w.print("{s} = {d},\n", .{ field_name, request.opcode });
+        }
+        try self.emitBlockEnd();
+    }
+    pub fn emitEventNumberEnum(self: @This(), events: []Ir.Protocol.Event) !void {
+        if (events.len == 0) return;
+        const w = self.writer;
+        try w.writeAll("pub const EventNumber = enum(u8) {\n");
+        for (events) |event| {
+            const field_name = try self.names.snakeCase(event.name);
+            try w.print("{s} = {d},\n", .{ field_name, event.number });
+        }
+        try self.emitBlockEnd();
+    }
     pub fn emitXid(self: @This(), xid: Ir.Protocol.Xid) !void {
         const w = self.writer;
         const name = try self.names.pascalCase(xid.name);
@@ -592,28 +722,55 @@ pub const IrEmitter = struct {
     pub fn emitEnum(self: @This(), @"enum": Ir.Protocol.Enum) !void {
         const w = self.writer;
         const name = try self.names.pascalCase(@"enum".name);
-        if (@"enum".tag_type) |tag_type| {
-            try w.print("pub const {s} = enum({s}) {{\n", .{ name, tag_type });
-        } else {
+        if (@"enum".is_generic)
             try w.print(
                 \\pub fn {s}(Tag: type) type {{
                 \\  return enum(Tag) {{
                 \\
-            , .{name});
-        }
+            , .{name})
+        else
+            try w.print("pub const {s} = enum({s}) {{\n", .{ name, @"enum".tag_type.? });
 
         for (@"enum".fields.items) |field| {
-            try w.print("{s} = {d},\n", .{ field.name, field.value });
+            const field_name = try self.names.snakeCase(field.name);
+            try w.print("{s} = {d},\n", .{ field_name, field.value });
         }
-
-        if (@"enum".tag_type != null)
-            try self.emitBlockEnd()
+        if (@"enum".is_generic)
+            try w.writeAll("};\n}\n\n")
         else
-            try w.writeAll("};\n}\n\n");
+            try self.emitBlockEnd();
     }
     pub fn emitBitmask(self: @This(), bitmask: Ir.Protocol.Bitmask) !void {
-        _ = self;
-        _ = bitmask;
+        const w = self.writer;
+        const name = try self.names.pascalCase(bitmask.name);
+        try w.print("pub const {s} = packed struct({s}) {{\n", .{ name, bitmask.tag_type orelse "u32" });
+
+        const max_bits: usize = if (bitmask.tag_type) |tag_type| try std.fmt.parseInt(usize, tag_type[4..], 10) else 32;
+
+        var bit_chain: usize = 0;
+        var pad_field_count: usize = 0;
+
+        for (0..max_bits) |bit| {
+            var found = false;
+
+            for (bitmask.fields.items) |field| if (field.bit == bit) {
+                found = true;
+
+                if (bit_chain > 0) {
+                    try w.print("pad{d}: u{d} = 0,\n", .{ pad_field_count, bit_chain });
+                    pad_field_count += 1;
+                    bit_chain = 0;
+                }
+
+                const field_name = try self.names.snakeCase(field.name);
+                try w.print("{s}: bool = false,\n", .{field_name});
+
+                break;
+            };
+
+            if (!found) bit_chain += 1;
+        }
+        try self.emitBlockEnd();
     }
     pub fn emitUnion(self: @This(), @"union": Ir.Protocol.Union) !void {
         const w = self.writer;
@@ -635,8 +792,15 @@ pub const IrEmitter = struct {
         try self.emitBlockEnd();
     }
     pub fn emitEvent(self: @This(), event: Ir.Protocol.Event) !void {
-        _ = self;
-        _ = event;
+        const w = self.writer;
+        const name = try self.names.pascalCase(event.name);
+        try w.print("pub const {s} = extern struct {{\n", .{name});
+        try self.emitFields(event.fields.items);
+
+        const number_name = try self.names.snakeCase(event.name);
+        try w.print("pub const number: EventNumber = .{s};\n", .{number_name});
+
+        try self.emitBlockEnd();
     }
     pub fn emitRequest(self: @This(), request: Ir.Protocol.Request) !void {
         const w = self.writer;
@@ -655,7 +819,14 @@ pub const IrEmitter = struct {
         for (fields) |field| switch (field) {
             .basic => |basic| {
                 const name = try self.names.snakeCase(basic.name);
-                try w.print("{s}: {s},\n", .{ name, basic.type });
+                switch (basic.extra) {
+                    .@"enum" => |@"enum"| if (@"enum".is_generic)
+                        try w.print("{s}: {s}({s}),\n", .{ name, @"enum".name, basic.type })
+                    else
+                        try w.print("{s}: {s},\n", .{ name, @"enum".name }),
+                    .bitmask => |bitmask| try w.print("{s}: {s},\n", .{ name, bitmask.name }),
+                    .none => try w.print("{s}: {s},\n", .{ name, basic.type }),
+                }
             },
             .pad => |pad| {
                 try w.print("pad{d}: [{d}]u8 = @splat(0),\n", .{ pad_field_count, pad });
