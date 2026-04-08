@@ -4,30 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const xproto = b.dependency("xproto", .{});
-
-    const scanner = Scanner.create(b);
-    scanner.addProtocols(.{
-        .root = xproto.path("src/"),
-        .files = &.{
-            "damage.xml", "dri2.xml",        "glx.xml",
-            "record.xml", "screensaver.xml", "sync.xml",
-            "xevie.xml",    "xfixes.xml", //"xkb.xml",
-            "xselinux.xml", "xvmc.xml",
-            "bigreq.xml",   "dbe.xml",
-            "dri3.xml",     "present.xml",
-            "render.xml",   "shape.xml",
-            "xc_misc.xml",  "xf86dri.xml",
-            "xinerama.xml", "xprint.xml",
-            "xtest.xml",    "composite.xml",
-            "dpms.xml",     "ge.xml",
-            "randr.xml",    "res.xml",
-            "shm.xml",      "xf86vidmode.xml",
-            //"xinput.xml",
-            "xproto.xml",   "xv.xml",
-        },
-    });
-
     const xau = b.addLibrary(.{
         .name = "xau",
         .root_module = b.createModule(.{
@@ -38,13 +14,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const mod = b.addModule("xcb", .{
-        .root_source_file = scanner.result,
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+    const xcb = b.addLibrary(.{
+        .name = "xcb",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
-    mod.addCSourceFiles(.{
+    xcb.root_module.addCSourceFiles(.{
         .root = b.path("src"),
         .files = &.{
             "xcb_auth.c",
@@ -57,8 +35,8 @@ pub fn build(b: *std.Build) void {
             "xcb_xid.c",
         },
     });
-    mod.addCSourceFiles(.{
-        .root = b.path("src/xcbgen/"),
+    xcb.root_module.addCSourceFiles(.{
+        .root = b.path("xcbgen/"),
         .files = &.{
             "xselinux.c",
             "xvmc.c",
@@ -94,11 +72,55 @@ pub fn build(b: *std.Build) void {
             "xtest.c",
         },
     });
-    mod.addIncludePath(b.path("src/"));
-    mod.addIncludePath(b.path("src/xcbgen"));
+    xcb.root_module.addIncludePath(b.path("src/"));
+    xcb.root_module.addIncludePath(b.path("xcbgen"));
 
-    mod.linkLibrary(xau);
+    xcb.installHeader(b.path("src/xcb.h"), "xcb.h");
+    xcb.installHeader(b.path("src/xcb.h"), "xcb/xcb.h");
+    xcb.installHeader(b.path("src/xcbext.h"), "xcb/xcbext.h");
+    xcb.installHeader(b.path("src/xcbint.h"), "xcb/xcbint.h");
+    xcb.installHeader(b.path("src/xcb_windefs.h"), "xcb/xcb_windefs.h");
+
+    xcb.installHeader(b.path("xcbgen/xselinux.h"), "xcb/xselinux.h");
+    xcb.installHeader(b.path("xcbgen/xvmc.h"), "xcb/xvmc.h");
+    xcb.installHeader(b.path("xcbgen/xf86vidmode.h"), "xcb/xf86vidmode.h");
+    xcb.installHeader(b.path("xcbgen/ge.h"), "xcb/ge.h");
+    xcb.installHeader(b.path("xcbgen/xf86dri.h"), "xcb/xf86dri.h");
+    xcb.installHeader(b.path("xcbgen/render.h"), "xcb/render.h");
+    xcb.installHeader(b.path("xcbgen/randr.h"), "xcb/randr.h");
+    xcb.installHeader(b.path("xcbgen/record.h"), "xcb/record.h");
+    xcb.installHeader(b.path("xcbgen/xinput.h"), "xcb/xinput.h");
+    xcb.installHeader(b.path("xcbgen/glx.h"), "xcb/glx.h");
+    xcb.installHeader(b.path("xcbgen/xinerama.h"), "xcb/xinerama.h");
+    xcb.installHeader(b.path("xcbgen/xv.h"), "xcb/xv.h");
+    xcb.installHeader(b.path("xcbgen/xc_misc.h"), "xcb/xc_misc.h");
+    xcb.installHeader(b.path("xcbgen/sync.h"), "xcb/sync.h");
+    xcb.installHeader(b.path("xcbgen/shm.h"), "xcb/shm.h");
+    xcb.installHeader(b.path("xcbgen/present.h"), "xcb/present.h");
+    xcb.installHeader(b.path("xcbgen/xfixes.h"), "xcb/xfixes.h");
+    xcb.installHeader(b.path("xcbgen/composite.h"), "xcb/composite.h");
+    xcb.installHeader(b.path("xcbgen/shape.h"), "xcb/shape.h");
+    xcb.installHeader(b.path("xcbgen/xevie.h"), "xcb/xevie.h");
+    xcb.installHeader(b.path("xcbgen/xprint.h"), "xcb/xprint.h");
+    xcb.installHeader(b.path("xcbgen/res.h"), "xcb/res.h");
+    xcb.installHeader(b.path("xcbgen/xkb.h"), "xcb/xkb.h");
+    xcb.installHeader(b.path("xcbgen/dbe.h"), "xcb/dbe.h");
+    xcb.installHeader(b.path("xcbgen/screensaver.h"), "xcb/screensaver.h");
+    xcb.installHeader(b.path("xcbgen/dpms.h"), "xcb/dpms.h");
+    xcb.installHeader(b.path("xcbgen/xproto.h"), "xcb/xproto.h");
+    xcb.installHeader(b.path("xcbgen/dri3.h"), "xcb/dri3.h");
+    xcb.installHeader(b.path("xcbgen/damage.h"), "xcb/damage.h");
+    xcb.installHeader(b.path("xcbgen/bigreq.h"), "xcb/bigreq.h");
+    xcb.installHeader(b.path("xcbgen/dri2.h"), "xcb/dri2.h");
+    xcb.installHeader(b.path("xcbgen/xtest.h"), "xcb/xtest.h");
+
+    xcb.root_module.linkLibrary(xau);
+
+    b.installArtifact(xau);
+    b.installArtifact(xcb);
 }
+
+const zig_xcb_build = @This();
 
 pub const Scanner = struct {
     run: *std.Build.Step.Run,
@@ -110,10 +132,11 @@ pub const Scanner = struct {
     };
 
     pub fn create(b: *std.Build) *@This() {
+        const scanner_source_path = b.dependencyFromBuildZig(zig_xcb_build, .{}).path("src/scanner.zig");
         const exe = b.addExecutable(.{
             .name = "xcb-scanner",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/scanner.zig"),
+                .root_source_file = scanner_source_path,
                 .target = b.graph.host,
             }),
         });
@@ -143,79 +166,3 @@ pub const Scanner = struct {
         }
     }
 };
-
-// const zig_xcb_build_zig = @This();
-
-// pub const Scanner = struct {
-//     run: *std.Build.Step.Run,
-//     result: std.Build.LazyPath,
-
-//     xcb_protocols: std.Build.LazyPath,
-
-//     pub const Options = struct {
-//         xcb_xml: ?std.Build.LazyPath = null,
-//         xcb_protocols: ?std.Build.LazyPath = null,
-//     };
-
-//     pub fn create(b: *std.Build, options: Options) *Scanner {
-//         const pkg_config_exe_path = b.graph.environ_map.get("PKG_CONFIG") orelse "pkg-config";
-//         const xcb_xml: std.Build.LazyPath = options.xcb_xml orelse blk: {
-//             const pc_output = b.run(&.{ pkg_config_exe_path, "--variable=pkgdatadir", "xcb-scanner" });
-//             break :blk .{
-//                 .cwd_relative = b.pathJoin(&.{ std.mem.trim(u8, pc_output, &std.ascii.whitespace), "xcb.xml" }),
-//             };
-//         };
-//         const xcb_protocols: std.Build.LazyPath = options.xcb_protocols orelse blk: {
-//             const pc_output = b.run(&.{ pkg_config_exe_path, "--variable=pkgdatadir", "xcb-protocols" });
-//             break :blk .{
-//                 .cwd_relative = std.mem.trim(u8, pc_output, &std.ascii.whitespace),
-//             };
-//         };
-
-//         const exe = b.addExecutable(.{
-//             .name = "zig-xcb-scanner",
-//             .root_module = b.createModule(.{
-//                 .root_source_file = blk: {
-//                     if (b.available_deps.len > 0) {
-//                         break :blk b.dependencyFromBuildZig(zig_xcb_build_zig, .{}).path("src/scanner.zig");
-//                     } else {
-//                         break :blk b.path("src/scanner.zig");
-//                     }
-//                 },
-//                 .target = b.graph.host,
-//             }),
-//         });
-
-//         const run = b.addRunArtifact(exe);
-
-//         run.addArg("-o");
-//         const result = run.addOutputFileArg("xcb.zig");
-
-//         run.addArg("-i");
-//         run.addFileArg(xcb_xml);
-
-//         const scanner = b.allocator.create(Scanner) catch @panic("OOM");
-//         scanner.* = .{
-//             .run = run,
-//             .result = result,
-//             .xcb_protocols = xcb_protocols,
-//         };
-
-//         return scanner;
-//     }
-
-//     /// Scan protocol xml provided by the wayland-protocols package at the given path
-//     /// relative to the wayland-protocols installation. (e.g. "xproto/bigreq.xml")
-//     pub fn addSystemProtocol(scanner: *Scanner, sub_path: []const u8) void {
-//         const b = scanner.run.step.owner;
-
-//         scanner.run.addArg("-i");
-//         scanner.run.addFileArg(scanner.xcb_protocols.path(b, sub_path));
-//     }
-
-//     /// Scan the protocol xml at the given path.
-//     pub fn addCustomProtocol(scanner: *Scanner, path: std.Build.LazyPath) void {
-//         scanner.run.addArg("-i");
-//         scanner.run.addFileArg(path);
-//     }
-// };

@@ -15,7 +15,6 @@ pub fn main(init: std.process.Init) !void {
     var out_path_opt: ?[]const u8 = null;
 
     var args = init.minimal.args.iterate();
-
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "-i")) {
             const protocol_path = args.next() orelse return error.MissingArg;
@@ -315,7 +314,6 @@ pub const Ir = struct {
             name: []const u8,
             fields: std.ArrayList(@This().Field) = .empty,
             tag_type: ?[]const u8 = null,
-            is_generic: bool = false,
 
             pub const Field = struct {
                 name: []const u8,
@@ -442,16 +440,6 @@ pub const Ir = struct {
         };
 
         try self.polishEnumAndBitmask();
-
-        for (protocol.enums.items) |*@"enum"| {
-            if (@"enum".tag_type == null) @"enum".is_generic = true;
-        }
-        for (protocol.enums.items) |e| {
-            log.info("({s}) enum {s}: {s}", .{ protocol.name, e.name, if (e.is_generic) "(generic)" else e.tag_type.? });
-        }
-        for (protocol.bitmasks.items) |e| {
-            log.info("({s}) bitmask {s}: {s}", .{ protocol.name, e.name, e.tag_type orelse "(missing tag)" });
-        }
     }
     pub fn parseXid(self: @This(), node: *ProtocolParser.Node) !Ir.Protocol.Xid {
         _ = self;
@@ -570,7 +558,34 @@ pub const IrEmitter = struct {
         pub const zig_keywords: []const [:0]const u8 = &.{
             "error",
             "suspend",
+            "union",
+            "packed",
         };
+
+        pub const type_aliases: std.StaticStringMap([]const u8) = .initComptime(&.{
+            .{ "STRING8", "[*:0]const u8" },
+            .{ "DRAWABLE", "Drawable" },
+            .{ "WINDOW", "Window" },
+            .{ "ATOM", "Atom" },
+            .{ "PIXMAP", "Pixmap" },
+            .{ "VISUALID", "VisualId" },
+            .{ "SCREEN", "Screen" },
+            .{ "TIMESTAMP", "Timestamp" },
+
+            .{ "BYTE", "u8" },
+            .{ "char", "u8" },
+
+            .{ "BOOL", "bool" },
+
+            .{ "INT8", "i8" },
+            .{ "INT16", "i16" },
+            .{ "INT32", "i32" },
+
+            .{ "CARD8", "u8" },
+            .{ "CARD16", "u16" },
+            .{ "CARD32", "u32" },
+            .{ "DOTCLOCK", "u32" }, // randr
+        });
 
         pub fn snakeCase(self: *@This(), name: []const u8) ![]u8 {
             const gpa = self.arena.allocator();
@@ -647,6 +662,14 @@ pub const IrEmitter = struct {
             for (snake_case) |*char| char = std.ascii.toUpper(char);
             return snake_case;
         }
+
+        pub fn fixType(self: *@This(), name: []const u8) ![]const u8 {
+            if (type_aliases.get(name)) |type_name| return type_name;
+            const gpa = self.arena.allocator();
+            const new_name = try gpa.dupe(u8, name);
+            std.mem.replaceScalar(u8, new_name, ':', '.');
+            return new_name;
+        }
     };
 
     pub fn deinit(self: @This()) void {
@@ -656,7 +679,15 @@ pub const IrEmitter = struct {
 
     pub fn emit(self: @This()) !void {
         for (self.ir.protocols.items) |protocol| {
+            const is_core = std.mem.eql(u8, protocol.name, "xproto");
+            if (!is_core) continue;
+
             try self.emitProtocol(protocol);
+        }
+
+        for (self.ir.protocols.items) |protocol| {
+            const is_core = std.mem.eql(u8, protocol.name, "xproto");
+            if (!is_core) try self.emitProtocol(protocol);
         }
     }
 
@@ -667,18 +698,22 @@ pub const IrEmitter = struct {
 
     pub fn emitProtocol(self: @This(), protocol: Ir.Protocol) !void {
         const w = self.writer;
-        if (protocol.extension_name) |name| try w.print("/// {s}\n", .{name});
-        try w.print(
-            \\pub const {s} = struct {{
-            \\  pub const major_version = {d};
-            \\  pub const minor_version = {d};
-            \\
-            \\
-        , .{
-            try self.names.snakeCase(protocol.name),
-            protocol.major_version,
-            protocol.minor_version,
-        });
+        const is_core = std.mem.eql(u8, protocol.name, "xproto");
+        if (!is_core) {
+            if (protocol.extension_name) |name| try w.print("/// {s}\n", .{name});
+            try w.print(
+                \\pub const {s} = struct {{
+                \\  pub const major_version = {d};
+                \\  pub const minor_version = {d};
+                \\
+                \\  const ext = @This();
+                \\
+            , .{
+                try self.names.snakeCase(protocol.name),
+                protocol.major_version,
+                protocol.minor_version,
+            });
+        }
 
         try self.emitOpcodeEnum(protocol.requests.items);
         try self.emitEventNumberEnum(protocol.events.items);
@@ -691,7 +726,7 @@ pub const IrEmitter = struct {
         for (protocol.events.items) |event| try self.emitEvent(event);
         for (protocol.requests.items) |request| try self.emitRequest(request);
 
-        try self.emitBlockEnd();
+        if (!is_core) try self.emitBlockEnd();
     }
     pub fn emitOpcodeEnum(self: @This(), requests: []Ir.Protocol.Request) !void {
         if (requests.len == 0) return;
@@ -715,30 +750,30 @@ pub const IrEmitter = struct {
     }
     pub fn emitXid(self: @This(), xid: Ir.Protocol.Xid) !void {
         const w = self.writer;
-        const name = try self.names.pascalCase(xid.name);
+        const name = try self.names.fixType(xid.name);
         try w.print("pub const {s} = enum(u32) {{_,", .{name});
         try self.emitBlockEnd();
     }
     pub fn emitEnum(self: @This(), @"enum": Ir.Protocol.Enum) !void {
         const w = self.writer;
-        const name = try self.names.pascalCase(@"enum".name);
-        if (@"enum".is_generic)
-            try w.print(
-                \\pub fn {s}(Tag: type) type {{
-                \\  return enum(Tag) {{
-                \\
-            , .{name})
-        else
-            try w.print("pub const {s} = enum({s}) {{\n", .{ name, @"enum".tag_type.? });
-
-        for (@"enum".fields.items) |field| {
-            const field_name = try self.names.snakeCase(field.name);
-            try w.print("{s} = {d},\n", .{ field_name, field.value });
+        if (@"enum".tag_type) |tag_type| {
+            const name = try self.names.pascalCase(@"enum".name);
+            try w.print("pub const {s} = enum({s}) {{\n", .{ name, try self.names.fixType(tag_type) });
+            for (@"enum".fields.items) |field| {
+                const field_name = try self.names.snakeCase(field.name);
+                try w.print("{s} = {d},\n", .{ field_name, field.value });
+            }
+        } else {
+            const name = try self.names.snakeCase(@"enum".name);
+            try w.writeAll("/// enum\n");
+            try w.print("pub const {s} = struct {{\n", .{name});
+            for (@"enum".fields.items) |field| {
+                const field_name = try self.names.snakeCase(field.name);
+                try w.print("pub const {s} = {d};\n", .{ field_name, field.value });
+            }
         }
-        if (@"enum".is_generic)
-            try w.writeAll("};\n}\n\n")
-        else
-            try self.emitBlockEnd();
+
+        try self.emitBlockEnd();
     }
     pub fn emitBitmask(self: @This(), bitmask: Ir.Protocol.Bitmask) !void {
         const w = self.writer;
@@ -779,7 +814,7 @@ pub const IrEmitter = struct {
 
         for (@"union".fields.items) |field| {
             const field_name = try self.names.snakeCase(field.name);
-            try w.print("{s}: {s},\n", .{ field_name, field.type });
+            try w.print("{s}: {s},\n", .{ field_name, try self.names.fixType(field.type) });
         }
 
         try self.emitBlockEnd();
@@ -798,7 +833,7 @@ pub const IrEmitter = struct {
         try self.emitFields(event.fields.items);
 
         const number_name = try self.names.snakeCase(event.name);
-        try w.print("pub const number: EventNumber = .{s};\n", .{number_name});
+        try w.print("pub const number: ext.EventNumber = .{s};\n", .{number_name});
 
         try self.emitBlockEnd();
     }
@@ -820,12 +855,12 @@ pub const IrEmitter = struct {
             .basic => |basic| {
                 const name = try self.names.snakeCase(basic.name);
                 switch (basic.extra) {
-                    .@"enum" => |@"enum"| if (@"enum".is_generic)
-                        try w.print("{s}: {s}({s}),\n", .{ name, @"enum".name, basic.type })
+                    .@"enum" => |@"enum"| if (@"enum".tag_type) |_|
+                        try w.print("{s}: {s},\n", .{ name, try self.names.pascalCase(@"enum".name) })
                     else
-                        try w.print("{s}: {s},\n", .{ name, @"enum".name }),
+                        try w.print("{s}: {s}, // {s}\n", .{ name, try self.names.fixType(basic.type), try self.names.snakeCase(@"enum".name) }),
                     .bitmask => |bitmask| try w.print("{s}: {s},\n", .{ name, bitmask.name }),
-                    .none => try w.print("{s}: {s},\n", .{ name, basic.type }),
+                    .none => try w.print("{s}: {s},\n", .{ name, try self.names.fixType(basic.type) }),
                 }
             },
             .pad => |pad| {
@@ -834,7 +869,7 @@ pub const IrEmitter = struct {
             },
             .list => |list| {
                 const name = try self.names.snakeCase(list.name);
-                try w.print("{s}_ptr: [*]{s},\n", .{ name, list.type });
+                try w.print("{s}_ptr: [*]const {s},\n", .{ name, try self.names.fixType(list.type) });
             },
         };
     }

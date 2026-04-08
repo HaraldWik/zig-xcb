@@ -34,23 +34,15 @@ const ffi = struct {
     extern fn xcb_disconnect(c: *Connection) void;
 };
 
-pub const BYTE = u8;
-pub const char = u8;
-
-pub const BOOL = bool;
-
-pub const INT8 = i8;
-pub const INT16 = i16;
-pub const INT32 = i32;
-
-pub const CARD8 = u8;
-pub const CARD16 = u16;
-pub const CARD32 = u32;
-
-pub const ATOM = enum(u32) {
+pub const Timestamp = enum(u32) {
     _,
 };
 
-pub const TIMESTAMP = enum(u32) {
+pub const VisualId = enum(u32) {
     _,
+};
+
+pub const Drawable = extern union {
+    window: Window,
+    pixmap: Pixmap,
 };
