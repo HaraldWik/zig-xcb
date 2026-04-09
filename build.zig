@@ -33,6 +33,7 @@ pub fn build(b: *std.Build) void {
             "xcb_out.c",
             "xcb_util.c",
             "xcb_xid.c",
+            "icccm.c",
         },
     });
     xcb.root_module.addCSourceFiles(.{
@@ -80,6 +81,7 @@ pub fn build(b: *std.Build) void {
     xcb.installHeader(b.path("src/xcbext.h"), "xcb/xcbext.h");
     xcb.installHeader(b.path("src/xcbint.h"), "xcb/xcbint.h");
     xcb.installHeader(b.path("src/xcb_windefs.h"), "xcb/xcb_windefs.h");
+    xcb.installHeader(b.path("src/xcb_icccm.h"), "xcb/xcb_icccm.h");
 
     xcb.installHeader(b.path("xcbgen/xselinux.h"), "xcb/xselinux.h");
     xcb.installHeader(b.path("xcbgen/xvmc.h"), "xcb/xvmc.h");
