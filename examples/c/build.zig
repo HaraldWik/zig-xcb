@@ -16,6 +16,8 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.addCSourceFile(.{ .file = b.path("src/main.c") });
 
+    exe.root_module.addIncludePath(xcb.path("include"));
+
     exe.root_module.linkLibrary(xcb.artifact("xcb"));
 
     b.installArtifact(exe);

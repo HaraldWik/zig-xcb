@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     xcb.root_module.addCSourceFiles(.{
-        .root = b.path("src"),
+        .root = b.path("include/xcb/"),
         .files = &.{
             "xcb_auth.c",
             "xcb_conn.c",
@@ -37,7 +37,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     xcb.root_module.addCSourceFiles(.{
-        .root = b.path("xcbgen/"),
+        .root = b.path("include/xcb/"),
         .files = &.{
             "xselinux.c",
             "xvmc.c",
@@ -73,48 +73,7 @@ pub fn build(b: *std.Build) void {
             "xtest.c",
         },
     });
-    xcb.root_module.addIncludePath(b.path("src/"));
-    xcb.root_module.addIncludePath(b.path("xcbgen"));
-
-    xcb.installHeader(b.path("src/xcb.h"), "xcb.h");
-    xcb.installHeader(b.path("src/xcb.h"), "xcb/xcb.h");
-    xcb.installHeader(b.path("src/xcbext.h"), "xcb/xcbext.h");
-    xcb.installHeader(b.path("src/xcbint.h"), "xcb/xcbint.h");
-    xcb.installHeader(b.path("src/xcb_windefs.h"), "xcb/xcb_windefs.h");
-    xcb.installHeader(b.path("src/xcb_icccm.h"), "xcb/xcb_icccm.h");
-
-    xcb.installHeader(b.path("xcbgen/xselinux.h"), "xcb/xselinux.h");
-    xcb.installHeader(b.path("xcbgen/xvmc.h"), "xcb/xvmc.h");
-    xcb.installHeader(b.path("xcbgen/xf86vidmode.h"), "xcb/xf86vidmode.h");
-    xcb.installHeader(b.path("xcbgen/ge.h"), "xcb/ge.h");
-    xcb.installHeader(b.path("xcbgen/xf86dri.h"), "xcb/xf86dri.h");
-    xcb.installHeader(b.path("xcbgen/render.h"), "xcb/render.h");
-    xcb.installHeader(b.path("xcbgen/randr.h"), "xcb/randr.h");
-    xcb.installHeader(b.path("xcbgen/record.h"), "xcb/record.h");
-    xcb.installHeader(b.path("xcbgen/xinput.h"), "xcb/xinput.h");
-    xcb.installHeader(b.path("xcbgen/glx.h"), "xcb/glx.h");
-    xcb.installHeader(b.path("xcbgen/xinerama.h"), "xcb/xinerama.h");
-    xcb.installHeader(b.path("xcbgen/xv.h"), "xcb/xv.h");
-    xcb.installHeader(b.path("xcbgen/xc_misc.h"), "xcb/xc_misc.h");
-    xcb.installHeader(b.path("xcbgen/sync.h"), "xcb/sync.h");
-    xcb.installHeader(b.path("xcbgen/shm.h"), "xcb/shm.h");
-    xcb.installHeader(b.path("xcbgen/present.h"), "xcb/present.h");
-    xcb.installHeader(b.path("xcbgen/xfixes.h"), "xcb/xfixes.h");
-    xcb.installHeader(b.path("xcbgen/composite.h"), "xcb/composite.h");
-    xcb.installHeader(b.path("xcbgen/shape.h"), "xcb/shape.h");
-    xcb.installHeader(b.path("xcbgen/xevie.h"), "xcb/xevie.h");
-    xcb.installHeader(b.path("xcbgen/xprint.h"), "xcb/xprint.h");
-    xcb.installHeader(b.path("xcbgen/res.h"), "xcb/res.h");
-    xcb.installHeader(b.path("xcbgen/xkb.h"), "xcb/xkb.h");
-    xcb.installHeader(b.path("xcbgen/dbe.h"), "xcb/dbe.h");
-    xcb.installHeader(b.path("xcbgen/screensaver.h"), "xcb/screensaver.h");
-    xcb.installHeader(b.path("xcbgen/dpms.h"), "xcb/dpms.h");
-    xcb.installHeader(b.path("xcbgen/xproto.h"), "xcb/xproto.h");
-    xcb.installHeader(b.path("xcbgen/dri3.h"), "xcb/dri3.h");
-    xcb.installHeader(b.path("xcbgen/damage.h"), "xcb/damage.h");
-    xcb.installHeader(b.path("xcbgen/bigreq.h"), "xcb/bigreq.h");
-    xcb.installHeader(b.path("xcbgen/dri2.h"), "xcb/dri2.h");
-    xcb.installHeader(b.path("xcbgen/xtest.h"), "xcb/xtest.h");
+    xcb.root_module.addIncludePath(b.path("include/xcb/"));
 
     xcb.root_module.linkLibrary(xau);
 

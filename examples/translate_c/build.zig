@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    xcb_translate_c.addIncludePath(xcb_dep.path("include/"));
 
     const exe = b.addExecutable(.{
         .name = "translate_c",
