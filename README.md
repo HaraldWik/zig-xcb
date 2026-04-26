@@ -82,5 +82,6 @@ const xcb = b.dependency("xcb", .{
     // .xvmc = true,
 
     // .icccm = true, // whether to enable the ICCCM library
+    // .translate_c = true, // adds a module named 'xcb' which will include all the declerations in zig
 });
 ```

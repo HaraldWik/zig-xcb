@@ -7,21 +7,15 @@ pub fn build(b: *std.Build) void {
     const xcb_dep = b.dependency("xcb", .{
         .target = target,
         .optimize = optimize,
+        .glx = true,
+        .randr = true,
+        .render = true,
+        .shape = true,
+        .shm = true,
+        .xfixes = true,
+        .xinput = true,
         .icccm = true,
-    });
-
-    const xcb_translate_c = b.addTranslateC(.{
-        .root_source_file = b.addWriteFiles().add("xcb.h",
-            \\#include <xcb/xcb.h>
-        ),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const icccm_translate_c = b.addTranslateC(.{
-        .root_source_file = xcb_dep.builder.dependency("xcb_util", .{}).path("icccm/xcb_icccm.h"),
-        .target = target,
-        .optimize = optimize,
+        .translate_c = true,
     });
 
     const exe = b.addExecutable(.{
@@ -31,8 +25,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "xcb", .module = xcb_translate_c.createModule() },
-                .{ .name = "icccm", .module = icccm_translate_c.createModule() },
+                .{ .name = "xcb", .module = xcb_dep.module("xcb") },
             },
         }),
     });

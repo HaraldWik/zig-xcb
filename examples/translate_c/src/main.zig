@@ -1,6 +1,5 @@
 const std = @import("std");
 const xcb = @import("xcb");
-const icccm = @import("icccm");
 
 pub fn main() !void {
     // Connect to the X server
@@ -47,9 +46,9 @@ pub fn main() !void {
     _ = xcb.xcb_map_window(connection, window);
 
     // Set min size
-    var hints: icccm.xcb_size_hints_t = .{};
-    icccm.xcb_icccm_size_hints_set_min_size(&hints, 400, 300);
-    _ = icccm.xcb_icccm_set_wm_normal_hints(@ptrCast(connection), window, &hints);
+    var hints: xcb.xcb_size_hints_t = .{};
+    xcb.xcb_icccm_size_hints_set_min_size(&hints, 400, 300);
+    _ = xcb.xcb_icccm_set_wm_normal_hints(connection, window, &hints);
     _ = xcb.xcb_flush(connection);
 
     std.debug.print("Window created on screen {}\n", .{screen_index});

@@ -12,8 +12,8 @@ pub fn build(b: *std.Build) void {
 
     const c_client = b.pathFromRoot("src/c_client.py");
 
-    var required_protocols_buffer: [protocols.len][:0]const u8 = undefined;
-    var required_protocols: std.ArrayList([:0]const u8) = .initBuffer(&required_protocols_buffer);
+    var required_protocols = std.ArrayList([:0]const u8).initCapacity(b.allocator, core_protocols.len + protocols.len) catch @panic("OOM");
+    defer required_protocols.deinit(b.allocator);
     required_protocols.appendSliceAssumeCapacity(core_protocols);
 
     for (protocols) |protocol| {
@@ -63,9 +63,6 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    libxcb.root_module.addIncludePath(xcb.path("src/"));
-    libxcb.installHeadersDirectory(xcb.path("src/"), "xcb/", .{});
-
     const xcbgen = b.addWriteFiles().getDirectory();
 
     for (required_protocols.items) |protocol| {
@@ -79,19 +76,48 @@ pub fn build(b: *std.Build) void {
         libxcb.root_module.addCSourceFile(.{ .file = xcbgen.path(b, b.fmt("{s}.c", .{protocol})) });
     }
 
+    libxcb.root_module.addIncludePath(xcb.path("src/"));
+    libxcb.installHeadersDirectory(xcb.path("src/"), "xcb/", .{});
+
     libxcb.root_module.addIncludePath(xcbgen);
-    libxcb.installHeadersDirectory(xcbgen, "xcb/", .{});
 
     const icccm = b.option(bool, "icccm", "whether to enable the ICCCM library") orelse false;
     if (icccm) {
         libxcb.root_module.addCSourceFile(.{ .file = xcb_util.path("icccm/icccm.c") });
         libxcb.root_module.addIncludePath(xcb_util.path("icccm/"));
-        // libxcb.installHeader(xcb_util.path("icccm/xcb_icccm.h"), "xcb/xcb_icccm.h");
     }
 
     libxcb.root_module.linkLibrary(libxau);
 
     b.installArtifact(libxcb);
+
+    const translate = b.option(bool, "translate_c", "adds a module named 'xcb' which will include all the declerations in zig") orelse false;
+    if (!translate) return;
+
+    var allocating = std.Io.Writer.Allocating.init(b.allocator);
+    defer allocating.deinit();
+    const writer = &allocating.writer;
+    writer.writeAll("#include <xcb.h>\n") catch {};
+    for (required_protocols.items) |protocol|
+        writer.print("#include <{s}.h>\n", .{protocol}) catch {};
+    if (icccm) writer.writeAll("#include <xcb_icccm.h>\n") catch {};
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.addWriteFiles().add("xcb.h", writer.buffered()),
+        .target = target,
+        .optimize = optimize,
+    });
+    translate_c.addIncludePath(xcb.path("src/"));
+    translate_c.addIncludePath(xcbgen);
+    if (icccm) translate_c.addIncludePath(xcb_util.path("icccm/"));
+
+    const mod = b.addModule("xcb", .{
+        .root_source_file = translate_c.getOutput(),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.linkLibrary(libxcb);
 }
 
 pub const core_protocols: []const [:0]const u8 = &.{
