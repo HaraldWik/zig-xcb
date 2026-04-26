@@ -4,7 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const xcb_dep = b.dependency("xcb", .{ .target = target, .optimize = optimize });
+    const xcb_dep = b.dependency("xcb", .{
+        .target = target,
+        .optimize = optimize,
+        .icccm = true,
+    });
 
     const xcb_translate_c = b.addTranslateC(.{
         .root_source_file = b.addWriteFiles().add("xcb.h",
@@ -13,7 +17,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    xcb_translate_c.addIncludePath(xcb_dep.path("include/"));
+
+    const icccm_translate_c = b.addTranslateC(.{
+        .root_source_file = xcb_dep.builder.dependency("xcb_util", .{}).path("icccm/xcb_icccm.h"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const exe = b.addExecutable(.{
         .name = "translate_c",
@@ -23,6 +32,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "xcb", .module = xcb_translate_c.createModule() },
+                .{ .name = "icccm", .module = icccm_translate_c.createModule() },
             },
         }),
     });

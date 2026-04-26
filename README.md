@@ -49,6 +49,8 @@ the libxcb code repository at:
 const xcb = b.dependency("xcb", .{
     .target = target,
     .optimize = optimize,
+    // .queue_buffer_size = <int> // default 1024
+
     // .composite = true,
     // .damage = true,
     // .dbe = true,
@@ -78,5 +80,7 @@ const xcb = b.dependency("xcb", .{
     // .xtest = true,
     // .xv = true,
     // .xvmc = true,
+
+    // .icccm = true, // whether to enable the ICCCM library
 });
 ```

@@ -6,6 +6,7 @@ pub fn build(b: *std.Build) void {
 
     const xcb = b.dependency("xcb", .{});
     const xproto = b.dependency("xproto", .{});
+    const xcb_util = b.dependency("xcb_util", .{});
 
     const python = b.findProgram(&.{"python3"}, &.{"python"}) catch @panic("could locate python3");
 
@@ -13,15 +14,9 @@ pub fn build(b: *std.Build) void {
 
     var required_protocols_buffer: [protocols.len][:0]const u8 = undefined;
     var required_protocols: std.ArrayList([:0]const u8) = .initBuffer(&required_protocols_buffer);
+    required_protocols.appendSliceAssumeCapacity(core_protocols);
 
-    outter: for (protocols) |protocol| {
-        for (core_protocols) |core| {
-            if (std.mem.eql(u8, protocol, core)) {
-                required_protocols.appendAssumeCapacity(protocol);
-                continue :outter;
-            }
-        }
-
+    for (protocols) |protocol| {
         const option = b.option(bool, protocol, protocol) orelse false;
         if (option) required_protocols.appendAssumeCapacity(protocol);
     }
@@ -46,16 +41,13 @@ pub fn build(b: *std.Build) void {
     });
 
     const config_header = b.addConfigHeader(.{ .include_path = "config.h" }, .{
-        .XCB_QUEUE_BUFFER_SIZE = 1024,
+        .XCB_QUEUE_BUFFER_SIZE = b.option(i64, "queue_buffer_size", "queue buffer size") orelse 1024,
         .IOV_MAX = std.posix.IOV_MAX,
     });
 
     libxcb.installConfigHeader(config_header);
     libxcb.root_module.addCMacro("HAVE_CONFIG_H", "1");
     libxcb.root_module.addIncludePath(config_header.getOutputFile().dirname());
-
-    // libxcb.root_module.addCMacro("XCB_QUEUE_BUFFER_SIZE", "1024");
-    // libxcb.root_module.addCMacro("IOV_MAX", "1024");
 
     libxcb.root_module.addCSourceFiles(.{
         .root = xcb.path("src/"),
@@ -90,14 +82,16 @@ pub fn build(b: *std.Build) void {
     libxcb.root_module.addIncludePath(xcbgen);
     libxcb.installHeadersDirectory(xcbgen, "xcb/", .{});
 
+    const icccm = b.option(bool, "icccm", "whether to enable the ICCCM library") orelse false;
+    if (icccm) {
+        libxcb.root_module.addCSourceFile(.{ .file = xcb_util.path("icccm/icccm.c") });
+        libxcb.root_module.addIncludePath(xcb_util.path("icccm/"));
+        // libxcb.installHeader(xcb_util.path("icccm/xcb_icccm.h"), "xcb/xcb_icccm.h");
+    }
+
     libxcb.root_module.linkLibrary(libxau);
 
     b.installArtifact(libxcb);
-
-    // xcb.h
-    // xcb_windefs.h
-    // xcbext.h
-    // xcbint.h
 }
 
 pub const core_protocols: []const [:0]const u8 = &.{
@@ -107,7 +101,6 @@ pub const core_protocols: []const [:0]const u8 = &.{
 };
 
 pub const protocols: []const [:0]const u8 = &.{
-    "bigreq",
     "composite",
     "damage",
     "dbe",
@@ -125,7 +118,6 @@ pub const protocols: []const [:0]const u8 = &.{
     "shape",
     "shm",
     "sync",
-    "xc_misc",
     "xevie",
     "xf86dri",
     "xf86vidmode",
@@ -134,7 +126,6 @@ pub const protocols: []const [:0]const u8 = &.{
     "xinput",
     "xkb",
     "xprint",
-    "xproto",
     "xselinux",
     "xtest",
     "xv",

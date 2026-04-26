@@ -12,6 +12,10 @@
             .url = "git+https://gitlab.freedesktop.org/xorg/proto/xcbproto#cf7e2581b613802f2f8ec2a4b50a6a20aad4bf52",
             .hash = "N-V-__8AAI3NDABGCTDod4wqDAgyjwu68E8QptAEjiiCyqRb",
         },
+        .xcb_util = .{
+            .url = "git+https://github.com/freedesktop-unofficial-mirror/xcb__util-wm#24eb17df2e1245885e72c9d4bbb0a0f69f0700f2",
+            .hash = "N-V-__8AAACuAwDWtC2dvrT74GuEkC-9XPNw-1lMcleKXyda",
+        },
     },
     .paths = .{
         "build.zig",
