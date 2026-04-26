@@ -2,7 +2,7 @@
     .name = .translate_c,
     .version = "0.0.0",
     .fingerprint = 0x1c84f645775f3c36,
-    .minimum_zig_version = "0.16.0-dev.3013+abd131e33",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .xcb = .{
             .path = "../..",
