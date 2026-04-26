@@ -4,8 +4,25 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const xau = b.addLibrary(.{
-        .name = "xau",
+    const xcb = b.dependency("xcb", .{});
+    const xproto = b.dependency("xproto", .{});
+    const xcb_util = b.dependency("xcb_util", .{});
+
+    const python = b.findProgram(&.{"python3"}, &.{"python"}) catch @panic("could locate python3");
+
+    const c_client = b.pathFromRoot("src/c_client.py");
+
+    var required_protocols_buffer: [protocols.len][:0]const u8 = undefined;
+    var required_protocols: std.ArrayList([:0]const u8) = .initBuffer(&required_protocols_buffer);
+    required_protocols.appendSliceAssumeCapacity(core_protocols);
+
+    for (protocols) |protocol| {
+        const option = b.option(bool, protocol, protocol) orelse false;
+        if (option) required_protocols.appendAssumeCapacity(protocol);
+    }
+
+    const libxau = b.addLibrary(.{
+        .name = "Xau",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/xau.zig"),
             .target = target,
@@ -14,7 +31,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const xcb = b.addLibrary(.{
+    const libxcb = b.addLibrary(.{
         .name = "xcb",
         .root_module = b.createModule(.{
             .target = target,
@@ -22,8 +39,18 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    xcb.root_module.addCSourceFiles(.{
-        .root = b.path("include/xcb/"),
+
+    const config_header = b.addConfigHeader(.{ .include_path = "config.h" }, .{
+        .XCB_QUEUE_BUFFER_SIZE = b.option(i64, "queue_buffer_size", "queue buffer size") orelse 1024,
+        .IOV_MAX = std.posix.IOV_MAX,
+    });
+
+    libxcb.installConfigHeader(config_header);
+    libxcb.root_module.addCMacro("HAVE_CONFIG_H", "1");
+    libxcb.root_module.addIncludePath(config_header.getOutputFile().dirname());
+
+    libxcb.root_module.addCSourceFiles(.{
+        .root = xcb.path("src/"),
         .files = &.{
             "xcb_auth.c",
             "xcb_conn.c",
@@ -33,97 +60,74 @@ pub fn build(b: *std.Build) void {
             "xcb_out.c",
             "xcb_util.c",
             "xcb_xid.c",
-            "icccm.c",
         },
     });
-    xcb.root_module.addCSourceFiles(.{
-        .root = b.path("include/xcb/"),
-        .files = &.{
-            "xselinux.c",
-            "xvmc.c",
-            "xf86vidmode.c",
-            "ge.c",
-            "xf86dri.c",
-            "render.c",
-            "randr.c",
-            "record.c",
-            "xinput.c",
-            "glx.c",
-            "xinerama.c",
-            "xv.c",
-            "xc_misc.c",
-            "sync.c",
-            "shm.c",
-            "present.c",
-            "xfixes.c",
-            "composite.c",
-            "shape.c",
-            "xevie.c",
-            "xprint.c",
-            "res.c",
-            "xkb.c",
-            "dbe.c",
-            "screensaver.c",
-            "dpms.c",
-            "xproto.c",
-            "dri3.c",
-            "damage.c",
-            "bigreq.c",
-            "dri2.c",
-            "xtest.c",
-        },
-    });
-    xcb.root_module.addIncludePath(b.path("include/xcb/"));
 
-    xcb.root_module.linkLibrary(xau);
+    libxcb.root_module.addIncludePath(xcb.path("src/"));
+    libxcb.installHeadersDirectory(xcb.path("src/"), "xcb/", .{});
 
-    b.installArtifact(xau);
-    b.installArtifact(xcb);
+    const xcbgen = b.addWriteFiles().getDirectory();
+
+    for (required_protocols.items) |protocol| {
+        const run = b.addSystemCommand(&.{ python, c_client });
+        run.addFileArg(xproto.path("src/").path(b, b.fmt("{s}.xml", .{protocol})));
+        run.setCwd(xcbgen);
+        run.setEnvironmentVariable("PYTHONPATH", xproto.builder.pathFromRoot("."));
+
+        libxcb.step.dependOn(&run.step);
+
+        libxcb.root_module.addCSourceFile(.{ .file = xcbgen.path(b, b.fmt("{s}.c", .{protocol})) });
+    }
+
+    libxcb.root_module.addIncludePath(xcbgen);
+    libxcb.installHeadersDirectory(xcbgen, "xcb/", .{});
+
+    const icccm = b.option(bool, "icccm", "whether to enable the ICCCM library") orelse false;
+    if (icccm) {
+        libxcb.root_module.addCSourceFile(.{ .file = xcb_util.path("icccm/icccm.c") });
+        libxcb.root_module.addIncludePath(xcb_util.path("icccm/"));
+        // libxcb.installHeader(xcb_util.path("icccm/xcb_icccm.h"), "xcb/xcb_icccm.h");
+    }
+
+    libxcb.root_module.linkLibrary(libxau);
+
+    b.installArtifact(libxcb);
 }
 
-const zig_xcb_build = @This();
+pub const core_protocols: []const [:0]const u8 = &.{
+    "bigreq",
+    "xc_misc",
+    "xproto",
+};
 
-pub const Scanner = struct {
-    run: *std.Build.Step.Run,
-    result: std.Build.LazyPath,
-
-    pub const AddProtocolsOptions = struct {
-        root: std.Build.LazyPath,
-        files: []const []const u8,
-    };
-
-    pub fn create(b: *std.Build) *@This() {
-        const scanner_source_path = b.dependencyFromBuildZig(zig_xcb_build, .{}).path("src/scanner.zig");
-        const exe = b.addExecutable(.{
-            .name = "xcb-scanner",
-            .root_module = b.createModule(.{
-                .root_source_file = scanner_source_path,
-                .target = b.graph.host,
-            }),
-        });
-
-        const run = b.addRunArtifact(exe);
-        run.addArg("-o");
-
-        const result = run.addOutputFileArg("xcb.zig");
-
-        const scanner = b.allocator.create(Scanner) catch @panic("OOM");
-        scanner.* = .{
-            .run = run,
-            .result = result,
-        };
-        return scanner;
-    }
-
-    pub fn addProtocol(scanner: *Scanner, path: std.Build.LazyPath) void {
-        scanner.run.addArg("-i");
-        scanner.run.addFileArg(path);
-    }
-
-    pub fn addProtocols(scanner: *Scanner, options: AddProtocolsOptions) void {
-        for (options.files) |file| {
-            const path = options.root.path(options.root.dependency.dependency.builder, file);
-            scanner.addProtocol(path);
-        }
-    }
+pub const protocols: []const [:0]const u8 = &.{
+    "composite",
+    "damage",
+    "dbe",
+    "dpms",
+    "dri2",
+    "dri3",
+    "ge",
+    "glx",
+    "present",
+    "randr",
+    "record",
+    "render",
+    "res",
+    "screensaver",
+    "shape",
+    "shm",
+    "sync",
+    "xevie",
+    "xf86dri",
+    "xf86vidmode",
+    "xfixes",
+    "xinerama",
+    "xinput",
+    "xkb",
+    "xprint",
+    "xselinux",
+    "xtest",
+    "xv",
+    "xvmc",
 };

@@ -1,7 +1,6 @@
-About libxcb zig port
+# libxcb zig port
 ============
-
-NOTE: The goal is no libc, we dont like libc!
+zig-xcb is based on libxcb.
 
 libxcb provides an interface to the X Window System protocol, which
 replaces the traditional Xlib interface. It has several advantages over
@@ -41,3 +40,47 @@ the libxcb code repository at:
   For developers, use:
 
     git clone git@gitlab.freedesktop.org:xorg/lib/libxcb.git
+
+## install
+
+`zig fetch --save git+https://github.com/HaraldWik/zig-xcb`
+
+```zig
+const xcb = b.dependency("xcb", .{
+    .target = target,
+    .optimize = optimize,
+    // .queue_buffer_size = <int> // default 1024
+
+    // .composite = true,
+    // .damage = true,
+    // .dbe = true,
+    // .dpms = true,
+    // .dri2 = true,
+    // .dri3 = true,
+    // .ge = true,
+    // .glx = true,
+    // .present = true,
+    // .randr = true,
+    // .record = true,
+    // .render = true,
+    // .res = true,
+    // .screensaver = true,
+    // .shape = true,
+    // .shm = true,
+    // .sync = true,
+    // .xevie = true,
+    // .xf86dri = true,
+    // .xf86vidmode = true,
+    // .xfixes = true,
+    // .xinerama = true,
+    // .xinput = true,
+    // .xkb = true,
+    // .xprint = true,
+    // .xselinux = true,
+    // .xtest = true,
+    // .xv = true,
+    // .xvmc = true,
+
+    // .icccm = true, // whether to enable the ICCCM library
+});
+```

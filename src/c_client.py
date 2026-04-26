@@ -6,6 +6,8 @@ import sys
 import errno
 import re
 
+# This file was modified by HaraldWik to not generate any man pages
+
 # Jump to the bottom of this file for the main routine
 
 #config settings (can be changed with commandline options)
@@ -309,8 +311,6 @@ def c_open(self):
         _c('')
         _c('xcb_extension_t %s = { "%s", 0 };', _ns.c_ext_global_name, _ns.ext_xname)
 
-out_dir = None
-
 def c_close(self):
     '''
     Exported function that handles module close.
@@ -332,19 +332,16 @@ def c_close(self):
     _h(' * @}')
     _h(' */')
 
-    # Assume out_dir is either None or a string ending with a slash, e.g. "/tmp/xcbgen/"
-    prefix = out_dir or ""  # if no out_dir, just use empty string
-    
     # Write header file
-    hfile = open(prefix + '%s.h' % _ns.header, 'w', encoding='UTF-8')
+    hfile = open('%s.h' % _ns.header, 'w', encoding='UTF-8')
     for list in _hlines:
         for line in list:
             hfile.write(line)
             hfile.write('\n')
     hfile.close()
-    
+
     # Write source file
-    cfile = open(prefix + '%s.c' % _ns.header, 'w', encoding='UTF-8')
+    cfile = open('%s.c' % _ns.header, 'w', encoding='UTF-8')
     for list in _clines:
         for line in list:
             cfile.write(line)
@@ -2668,6 +2665,7 @@ def _c_cookie(self, name):
     _h('    unsigned int sequence;')
     _h('} %s;', self.c_cookie_type)
 
+
 def c_request(self, name):
     '''
     Exported function that handles request declarations.
@@ -2860,8 +2858,6 @@ for (opt, arg) in opts:
         sys.path.insert(1, arg)
     if opt == '--server-side':
         config_server_side=True
-    if opt == '-o':
-        out_dir=arg
     elif opt == '-m':
         manpaths = True
         sys.stdout.write('man_MANS = ')

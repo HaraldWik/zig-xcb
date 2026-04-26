@@ -4,7 +4,39 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const xcb = b.dependency("xcb", .{ .target = target, .optimize = optimize });
+    const xcb = b.dependency("xcb", .{
+        .target = target,
+        .optimize = optimize,
+        // .composite = true,
+        // .damage = true,
+        // .dbe = true,
+        // .dpms = true,
+        // .dri2 = true,
+        // .dri3 = true,
+        // .ge = true,
+        // .glx = true,
+        // .present = true,
+        // .randr = true,
+        // .record = true,
+        // .render = true,
+        // .res = true,
+        // .screensaver = true,
+        // .shape = true,
+        // .shm = true,
+        // .sync = true,
+        // .xevie = true,
+        // .xf86dri = true,
+        // .xf86vidmode = true,
+        // .xfixes = true,
+        // .xinerama = true,
+        // .xinput = true,
+        // .xkb = true,
+        // .xprint = true,
+        // .xselinux = true,
+        // .xtest = true,
+        // .xv = true,
+        // .xvmc = true,
+    });
 
     const exe = b.addExecutable(.{
         .name = "c",
@@ -15,8 +47,6 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.addCSourceFile(.{ .file = b.path("src/main.c") });
-
-    exe.root_module.addIncludePath(xcb.path("include"));
 
     exe.root_module.linkLibrary(xcb.artifact("xcb"));
 
